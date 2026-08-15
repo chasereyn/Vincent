@@ -37,7 +37,12 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.1.0`
+- Version: `internal/version/version.go`, currently `0.2.0`
+
+Bump the version when shipping a phase. There is no auto-update, so
+`vincent --version` is the only way to tell whether the binary on PATH is
+the one just built — and on Windows an install silently fails to replace a
+running executable, which makes that a real question.
 
 ## Where it stands
 
