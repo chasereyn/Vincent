@@ -121,6 +121,12 @@ func Parse(out string) []Row {
 	}
 
 	for _, line := range lines {
+		// A CRLF file yields diff lines ending in \r, since git reports the
+		// content verbatim and we split on \n. Left in, every row of every
+		// CRLF file — most of a .NET or JS repo on Windows — would carry a
+		// stray control character at its end, both as a rendered glyph and
+		// as a character the word-level tint has to reason about.
+		line = strings.TrimSuffix(line, "\r")
 		if skipLine(line) {
 			continue
 		}

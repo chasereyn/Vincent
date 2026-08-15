@@ -23,8 +23,12 @@ the git panel are still ahead — see the roadmap.
 ```sh
 git clone https://github.com/chasereyn/vincent
 cd vincent
-make build          # ./bin/vincent
+make install        # builds, then copies to ~/.local/bin
 ```
+
+`make build` alone leaves the binary at `./bin/vincent` (`.exe` on Windows)
+if you'd rather place it yourself. Override the destination with
+`make install INSTALL_DIR=/usr/local/bin`.
 
 Requires Go 1.24+ and `git` on PATH. No cgo, no runtime, no external
 rendering tools.
@@ -37,9 +41,27 @@ vincent <directory>         # open a project, or a folder of projects
 vincent <file>              # open a file; its parent becomes the root
 ```
 
+Point it at **a repository**, not a folder of repositories — until phase 4
+lands, git features resolve against the directory you opened, so a parent
+folder gives you a file tree and nothing else.
+
 Click `≡` at the top left, right-click anywhere, or double-tap `Esc` for
 the action menu. There are no `Ctrl+` shortcuts on purpose — they fight
 tmux and terminal emulators. Leader keys are `Esc`-prefixed.
+
+| | |
+|---|---|
+| `Esc Esc` | Action menu — every command, always |
+| `Esc d` | **Diff the active file** |
+| `Esc p` | Find file by name |
+| `Esc f` | Find in file |
+| `Esc t` | Show / hide the file tree |
+| `Esc w` | Close tab |
+| `Esc q` | Quit |
+
+Mouse: click a file to open it, click a tab to switch, click `×` to close,
+drag the splitter to resize the tree, scroll anywhere. Click a change bar
+in the gutter to jump straight into that change in the diff.
 
 ### Diffs
 

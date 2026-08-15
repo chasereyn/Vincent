@@ -162,6 +162,38 @@ func TestParse_BlankContextLineCountsAsContext(t *testing.T) {
 	}
 }
 
+// TestParse_StripsCarriageReturns covers CRLF files, which on Windows means
+// most of a .NET or JS repo. git reports the content verbatim and we split
+// on \n, so without the trim every row would end in a stray control
+// character — visible as a glyph, and material the word-level tint would
+// have to reason about.
+func TestParse_StripsCarriageReturns(t *testing.T) {
+	rows := Parse("@@ -1,3 +1,3 @@\r\n alpha\r\n-bravo\r\n+BRAVO\r\n charlie\r\n")
+
+	if len(rows) != 4 {
+		t.Fatalf("got %d rows, want 4: %+v", len(rows), rows)
+	}
+	for i, r := range rows {
+		if strings.ContainsRune(r.Text, '\r') {
+			t.Errorf("row %d text %q still carries a carriage return", i, r.Text)
+		}
+	}
+	if rows[1].Text != "bravo" || rows[2].Text != "BRAVO" {
+		t.Errorf("texts = %q / %q, want %q / %q", rows[1].Text, rows[2].Text, "bravo", "BRAVO")
+	}
+	// The hunk header must survive its own \r, or the line numbers are lost.
+	if rows[0].Old != 1 || rows[0].New != 1 {
+		t.Errorf("row 0 = old %d new %d, want 1/1 — the \\r broke the hunk header",
+			rows[0].Old, rows[0].New)
+	}
+	// The whole word differs, so nothing is tinted — but crucially the
+	// comparison must not have seen a shared "\r" suffix.
+	if rows[1].HasWordTint() {
+		t.Errorf("unrelated pair tinted %q",
+			string([]rune(rows[1].Text)[rows[1].WordStart:rows[1].WordEnd]))
+	}
+}
+
 // TestParse_MalformedHunkHeaderKeepsGoing pins the tolerance contract: a
 // header we can't read costs the numbers on its own hunk and nothing more.
 // Returning an error instead would mean the user gets no diff at all, with

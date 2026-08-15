@@ -6,7 +6,17 @@
 # The website targets are gone — Vincent has no site to build.
 # =============================================================================
 
-BINARY := vincent
+# GOEXE is ".exe" on Windows and empty everywhere else. Without it the
+# Windows build produces an extensionless file that IS a valid PE binary but
+# that PowerShell silently refuses to run — Windows only executes what
+# PATHEXT lists, and there is no error message when it doesn't.
+EXE := $(shell go env GOEXE)
+BINARY := vincent$(EXE)
+
+# INSTALL_DIR is where `make install` puts the binary. ~/.local/bin rather
+# than GOPATH/bin because that is what is actually on PATH on this machine.
+# Override on the command line if yours differs: make install INSTALL_DIR=...
+INSTALL_DIR ?= $(HOME)/.local/bin
 
 .PHONY: run build install build-linux build-mac test test-race test-short coverage tidy clean help
 
@@ -16,7 +26,7 @@ help:
 	@echo ""
 	@echo "  make run          Run against the current directory."
 	@echo "  make build        Build the binary into ./bin/$(BINARY)."
-	@echo "  make install      go install into \$$GOPATH/bin."
+	@echo "  make install      Build and copy to $(INSTALL_DIR)."
 	@echo "  make build-linux  Cross-compile a static linux/amd64 binary."
 	@echo "  make build-mac    Cross-compile a static darwin/arm64 binary."
 	@echo "  make test         Run the full suite."
@@ -36,10 +46,15 @@ build:
 	mkdir -p bin
 	go build -o bin/$(BINARY) .
 
-# install puts the binary on PATH via the Go toolchain rather than
-# /usr/local/bin, which needs sudo on macOS and does not exist on Windows.
-install:
-	go install .
+# install builds and copies the binary to INSTALL_DIR (~/.local/bin by
+# default). NOT `go install`: that lands in GOPATH/bin, which is not on PATH
+# on this machine, so the command would appear to succeed and then `vincent`
+# would still be "not recognised".
+install: build
+	mkdir -p "$(INSTALL_DIR)"
+	cp bin/$(BINARY) "$(INSTALL_DIR)/$(BINARY)"
+	@echo "Installed $(INSTALL_DIR)/$(BINARY)"
+	@echo "Run 'vincent' from any directory."
 
 # build-linux cross-compiles a fully static linux/amd64 binary.
 build-linux:
