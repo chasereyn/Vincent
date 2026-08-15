@@ -42,13 +42,19 @@ const (
 	defaultSidebarWidth = 30
 	minSidebarWidth     = 18
 	minEditorAfterDrag  = 40
-	minWidth            = 50
-	minHeight           = 24
-	statusFlashFor      = 3 * time.Second
-	doubleClickMs       = 500 * time.Millisecond
-	doubleEscMs         = 500 * time.Millisecond
-	wheelLines          = 3
-	wheelCols           = 6 // horizontal step per WheelLeft/WheelRight event
+
+	// The Changes panel starts a little wider than the tree: its rows carry
+	// a filename AND a dimmed parent directory, and the parent is the half
+	// that gets clipped first.
+	defaultGitPanelWidth = 34
+	minGitPanelWidth     = 24
+	minWidth             = 50
+	minHeight            = 24
+	statusFlashFor       = 3 * time.Second
+	doubleClickMs        = 500 * time.Millisecond
+	doubleEscMs          = 500 * time.Millisecond
+	wheelLines           = 3
+	wheelCols            = 6 // horizontal step per WheelLeft/WheelRight event
 
 	// modifierStickyWindow is how long a previously-seen Shift modifier
 	// state is allowed to persist forward onto the next wheel event.
@@ -178,6 +184,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		// Review
 		{
 			{label: "View diff", shortcut: "Esc d", action: (*App).menuViewDiff, enabled: (*App).hasDiffableTab},
+			{shortcut: "Esc g", action: (*App).menuToggleGitPanel, enabled: alwaysTrue, labelFor: (*App).gitPanelToggleLabel, visible: (*App).hasTree},
 		},
 		// Search
 		{
@@ -297,6 +304,19 @@ type App struct {
 	// + 1-cell splitter on its right edge), in screen cells. The user can
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
+
+	// The Changes panel down the right-hand side. gitPanelWidth mirrors
+	// sidebarWidth (block width, splitter included — here on its LEFT edge).
+	// gitSnap is the last `git status` read; the tree's dirty highlight is
+	// derived from the same snapshot so the two can never disagree.
+	// lastGitPanelRows is the hit-test snapshot recorded during the draw,
+	// and gitPanelHover is the screen row under the pointer, or -1.
+	gitPanelShown    bool
+	gitPanelWidth    int
+	gitSnap          gitSnapshot
+	gitPanelScroll   int
+	gitPanelHover    int
+	lastGitPanelRows []gitPanelRowRect
 
 	clipBuf      string
 	statusMsg    string
@@ -446,6 +466,8 @@ func New(rootDir string) (*App, error) {
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
+		gitPanelWidth:  defaultGitPanelWidth,
+		gitPanelHover:  -1,
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.loadUserConfig()
@@ -504,6 +526,8 @@ func NewSingleFile(filePath string) (*App, error) {
 		hoveredMenuRow: -1,
 		sidebarShown:   false,
 		sidebarWidth:   defaultSidebarWidth,
+		gitPanelWidth:  defaultGitPanelWidth,
+		gitPanelHover:  -1,
 	}
 	a.setActiveFolder(rootDir)
 	a.loadUserConfig()
@@ -559,18 +583,24 @@ func (a *App) refreshGitStatus() {
 		a.refreshGitLineChanges()
 		return
 	}
-	st := loadGitStatus(a.rootDir)
-	if !st.IsRepo {
+	// ONE `git status` run feeds both consumers. The tree wants a
+	// path -> kind map and the panel wants an ordered list, which is
+	// exactly the difference that tempts you into a second run and a
+	// second parser — and then they drift, and a file is orange in the
+	// tree but missing from the panel.
+	snap := loadGitSnapshot(a.rootDir)
+	a.refreshGitPanel(snap)
+	if !snap.IsRepo {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
 		a.refreshGitLineChanges()
 		return
 	}
-	dirtyFiles := rebaseGitPaths(st.DirtyFiles, a.tree.Root.Path)
+	dirtyFiles := rebaseGitPaths(snap.DirtyFiles(), a.tree.Root.Path)
 	a.tree.DirtyFiles = dirtyFiles
 	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
-	a.gitBranch = st.Branch
+	a.gitBranch = snap.Branch
 	a.refreshGitLineChanges()
 }
 
@@ -648,6 +678,10 @@ func (a *App) handleEvent(ev tcell.Event) {
 	switch e := ev.(type) {
 	case *tcell.EventResize:
 		a.width, a.height = a.screen.Size()
+		// Re-clamp both side panels before anything reads a rect: at the
+		// old widths a narrowed window leaves the editor at zero or
+		// negative width.
+		a.reflowPanels()
 		a.screen.Sync()
 	case *tcell.EventKey:
 		a.handleKey(e)
@@ -786,7 +820,7 @@ func (a *App) resizeSidebar(target int) {
 	if target < minSidebarWidth {
 		target = minSidebarWidth
 	}
-	max := a.width - minEditorAfterDrag
+	max := a.width - minEditorAfterDrag - a.gitPanelW()
 	if max < minSidebarWidth {
 		max = minSidebarWidth
 	}
@@ -799,7 +833,7 @@ func (a *App) resizeSidebar(target int) {
 // tabBarRect returns the tab bar's screen rectangle (one row tall).
 func (a *App) tabBarRect() (x, y, w, h int) {
 	sw := a.sidebarW()
-	return sw, 0, a.width - sw, 1
+	return sw, 0, a.width - sw - a.gitPanelW(), 1
 }
 
 // editorRect returns the editor body's screen rectangle (everything to the
@@ -812,7 +846,7 @@ func (a *App) editorRect() (x, y, w, h int) {
 	if a.findOpen {
 		h -= findBarHeight
 	}
-	return sw, 1, a.width - sw, h
+	return sw, 1, a.width - sw - a.gitPanelW(), h
 }
 
 // statusRect returns the status bar's screen rectangle (full-width bottom row).
@@ -1062,6 +1096,14 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// Changes-panel hover. Updated on every mouse event rather than only on
+	// motion, because terminals emit no "pointer left the window" event —
+	// tying it to motion alone leaves a row lit after the pointer moves to
+	// another pane.
+	if a.gitPanelShown {
+		a.updateGitPanelHover(x, y)
+	}
+
 	// Right-click handling. Over a file-tree row it opens a small context
 	// menu with file-management actions for that node; everywhere else
 	// it falls through to the main action menu so users have a redundant
@@ -1129,13 +1171,28 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// Changes-panel resize drag. The panel grows leftwards, so its width is
+	// measured from the right edge rather than from zero.
+	if leftDown && a.dragMode == "gitpanel" {
+		a.resizeGitPanel(a.width - x)
+		return
+	}
+
 	// Initial press dispatch.
 	if leftDown && a.dragMode == "" {
 		sw := a.sidebarW()
 		splitX := a.splitterX()
+		gitSplitX := a.gitSplitterX()
 		switch {
 		case splitX >= 0 && x == splitX:
 			a.dragMode = "sidebar"
+		case gitSplitX >= 0 && x == gitSplitX:
+			a.dragMode = "gitpanel"
+		// The Changes panel is tested before the tab bar and the editor so
+		// its top row belongs to the panel header, not to the tab strip
+		// that ends to its left.
+		case gitSplitX >= 0 && x > gitSplitX && y < a.height-1:
+			a.gitPanelClick(x, y)
 		case sw > 0 && x < splitX:
 			a.sidebarClick(x, y)
 		case y == 0:
@@ -1179,6 +1236,10 @@ func (a *App) handleMenuMouse(x, y int, btn tcell.ButtonMask) {
 
 // scrollAt scrolls whichever panel the (x, y) cursor is over.
 func (a *App) scrollAt(x, y, delta int) {
+	if gs := a.gitSplitterX(); gs >= 0 && x >= gs {
+		a.scrollGitPanel(delta)
+		return
+	}
 	if sw := a.sidebarW(); sw > 0 && x < sw {
 		a.tree.Scroll(delta)
 		return
@@ -1195,6 +1256,9 @@ func (a *App) scrollAt(x, y, delta int) {
 // so we only honor horizontal wheel events when they fall inside the
 // editor pane.
 func (a *App) scrollAtH(x, y, delta int) {
+	if gs := a.gitSplitterX(); gs >= 0 && x >= gs {
+		return
+	}
 	if sw := a.sidebarW(); sw > 0 && x < sw {
 		return
 	}
@@ -2087,6 +2151,11 @@ func (a *App) draw() {
 		a.drawSplitter()
 	}
 
+	if a.gitPanelShown {
+		a.drawGitPanel()
+		a.drawGitSplitter()
+	}
+
 	a.drawTabBar()
 
 	if tab := a.activeTabPtr(); tab != nil {
@@ -2249,6 +2318,24 @@ func (a *App) drawSplitter() {
 	}
 	fg := a.theme.Subtle
 	if a.dragMode == "sidebar" {
+		fg = a.theme.Accent
+	}
+	style := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(fg)
+	for y := 0; y < a.height-1; y++ {
+		a.screen.SetContent(x, y, '│', nil, style)
+	}
+}
+
+// drawGitSplitter paints the Changes panel's grab handle down its LEFT
+// edge — the mirror of drawSplitter, which sits on the sidebar's right.
+// Same idle / dragging colours so both handles read as the same control.
+func (a *App) drawGitSplitter() {
+	x := a.gitSplitterX()
+	if x < 0 {
+		return
+	}
+	fg := a.theme.Subtle
+	if a.dragMode == "gitpanel" {
 		fg = a.theme.Accent
 	}
 	style := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(fg)

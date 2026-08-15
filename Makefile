@@ -6,6 +6,11 @@
 # The website targets are gone — Vincent has no site to build.
 # =============================================================================
 
+# NOTE: every @echo in this file is plain ASCII on purpose. make writes UTF-8
+# bytes straight to the console, and the Windows console is cp1252 by default
+# — an em-dash comes out as mojibake. Comments can use whatever they like;
+# anything PRINTED cannot.
+
 # GOEXE is ".exe" on Windows and empty everywhere else. Without it the
 # Windows build produces an extensionless file that IS a valid PE binary but
 # that PowerShell silently refuses to run — Windows only executes what
@@ -22,7 +27,7 @@ INSTALL_DIR ?= $(HOME)/.local/bin
 
 # help is the default target so `make` with no args prints what's available.
 help:
-	@echo "Vincent — read-only, mouse-first terminal client for reviewing agent code"
+	@echo "Vincent - read-only, mouse-first terminal client for reviewing agent code"
 	@echo ""
 	@echo "  make run          Run against the current directory."
 	@echo "  make build        Build the binary into ./bin/$(BINARY)."
@@ -31,7 +36,7 @@ help:
 	@echo "  make build-mac    Cross-compile a static darwin/arm64 binary."
 	@echo "  make test         Run the full suite."
 	@echo "  make test-race    Run with -race (needs cgo; CI parity)."
-	@echo "  make test-short   Skip slow tests — quick iteration loop."
+	@echo "  make test-short   Skip slow tests - quick iteration loop."
 	@echo "  make coverage     Generate coverage.out + coverage.html."
 	@echo "  make tidy         Run 'go mod tidy'."
 	@echo "  make clean        Remove ./bin and coverage artifacts."
@@ -51,8 +56,15 @@ build:
 # on this machine, so the command would appear to succeed and then `vincent`
 # would still be "not recognised".
 install: build
-	mkdir -p "$(INSTALL_DIR)"
-	cp bin/$(BINARY) "$(INSTALL_DIR)/$(BINARY)"
+	@mkdir -p "$(INSTALL_DIR)"
+	@cp bin/$(BINARY) "$(INSTALL_DIR)/$(BINARY)" 2>/dev/null || { \
+		echo ""; \
+		echo "Could not replace $(INSTALL_DIR)/$(BINARY)."; \
+		echo "Windows locks a running executable - if Vincent is open, quit it"; \
+		echo "(Esc q) and run 'make install' again. The new build is already at"; \
+		echo "bin/$(BINARY) either way."; \
+		echo ""; \
+		exit 1; }
 	@echo "Installed $(INSTALL_DIR)/$(BINARY)"
 	@echo "Run 'vincent' from any directory."
 

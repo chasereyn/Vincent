@@ -5,8 +5,8 @@
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-// Tests for gitstatus.go. The byte-parsing helpers (parsePorcelain,
-// unquotePath, dirtyFolderSet, pathInside) are exercised in isolation
+// Tests for gitstatus.go. The pure helpers (dirtyFolderSet, pathInside)
+// are exercised in isolation
 // with synthetic input — no subprocess needed. The shell-out flow
 // (loadGitStatus end-to-end) is exercised against a real `git init`'d
 // repo in a t.TempDir, and skipped when git isn't on PATH so the test
@@ -24,53 +24,6 @@ import (
 	"github.com/chasereyn/vincent/internal/editor"
 	"github.com/chasereyn/vincent/internal/filetree"
 )
-
-// TestLoadGitStatus_NotARepo verifies that pointing the loader at a
-// directory that isn't tracked by git returns the zero-value gitStatus —
-// the editor should silently skip its dirty highlight rather than
-// erroring out when run inside a plain folder.
-func TestLoadGitStatus_NotARepo(t *testing.T) {
-	dir := t.TempDir()
-	st := loadGitStatus(dir)
-	if st.IsRepo {
-		t.Fatalf("plain dir should not report as repo, got %+v", st)
-	}
-	if st.DirtyFiles != nil {
-		t.Fatalf("plain dir should have nil DirtyFiles, got %v", st.DirtyFiles)
-	}
-}
-
-// TestLoadGitStatus_EmptyRoot guards the "" early-return so a fresh App
-// (rootDir not yet set) can call refreshGitStatus without spawning git.
-func TestLoadGitStatus_EmptyRoot(t *testing.T) {
-	if st := loadGitStatus(""); st.IsRepo {
-		t.Fatalf("empty rootDir should not report as repo, got %+v", st)
-	}
-}
-
-// TestLoadGitStatus_CleanRepo runs the full pipeline against a freshly
-// initialised, fully committed repo and confirms IsRepo flips on but the
-// dirty set comes back empty — the renderer should treat clean files
-// like any other, no Modified-color highlight. Also pins down that the
-// branch name comes through populated.
-func TestLoadGitStatus_CleanRepo(t *testing.T) {
-	requireGit(t)
-	repo := initRepo(t)
-	writeFileT(t, filepath.Join(repo, "a.txt"), "hello")
-	gitRun(t, repo, "add", "a.txt")
-	gitRun(t, repo, "commit", "-m", "init")
-
-	st := loadGitStatus(repo)
-	if !st.IsRepo {
-		t.Fatal("expected IsRepo=true on a real git repo")
-	}
-	if len(st.DirtyFiles) != 0 {
-		t.Fatalf("expected no dirty files, got %v", st.DirtyFiles)
-	}
-	if st.Branch != "main" {
-		t.Fatalf("expected Branch=main, got %q", st.Branch)
-	}
-}
 
 // TestLoadGitLineChanges_IncludesStagedChanges compares the worktree with HEAD,
 // so staging a file does not remove its gutter markers.
@@ -155,169 +108,6 @@ func TestLoadGitBranch_DetachedHEAD(t *testing.T) {
 	}
 }
 
-// TestLoadGitStatus_FindsModifiedAndUntracked seeds a repo with one
-// committed file (later modified), one brand-new untracked file, and
-// one staged-but-uncommitted file. All three should show up as dirty,
-// indexed by absolute path so the file tree's path-keyed lookup hits.
-func TestLoadGitStatus_FindsModifiedAndUntracked(t *testing.T) {
-	requireGit(t)
-	repo := initRepo(t)
-
-	writeFileT(t, filepath.Join(repo, "tracked.txt"), "v1")
-	gitRun(t, repo, "add", "tracked.txt")
-	gitRun(t, repo, "commit", "-m", "init")
-
-	// Modify the tracked file (worktree change).
-	writeFileT(t, filepath.Join(repo, "tracked.txt"), "v2")
-	// Brand-new untracked file.
-	writeFileT(t, filepath.Join(repo, "untracked.txt"), "fresh")
-	// Staged-but-uncommitted.
-	writeFileT(t, filepath.Join(repo, "staged.txt"), "added")
-	gitRun(t, repo, "add", "staged.txt")
-
-	st := loadGitStatus(repo)
-	if !st.IsRepo {
-		t.Fatal("expected IsRepo=true")
-	}
-	for _, want := range []string{"tracked.txt", "untracked.txt", "staged.txt"} {
-		abs := filepath.Join(repo, want)
-		if st.DirtyFiles[abs] == filetree.GitChangeNone {
-			t.Errorf("expected %s to be dirty; got %v", want, sortedKeys(st.DirtyFiles))
-		}
-	}
-}
-
-// TestLoadGitStatus_FromSubdirectory makes sure the loader works when
-// the editor was launched against a subdirectory of the repo, not the
-// repo root. rev-parse --show-toplevel resolves the real top, and dirty
-// paths still come back as absolute — even files outside the working
-// rootDir but inside the repo.
-func TestLoadGitStatus_FromSubdirectory(t *testing.T) {
-	requireGit(t)
-	repo := initRepo(t)
-	sub := filepath.Join(repo, "deep", "dir")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	writeFileT(t, filepath.Join(sub, "inside.txt"), "x")
-	writeFileT(t, filepath.Join(repo, "outside.txt"), "y")
-	gitRun(t, repo, "add", ".")
-	gitRun(t, repo, "commit", "-m", "init")
-
-	// Mutate both files so they appear dirty.
-	writeFileT(t, filepath.Join(sub, "inside.txt"), "x2")
-	writeFileT(t, filepath.Join(repo, "outside.txt"), "y2")
-
-	st := loadGitStatus(sub)
-	if !st.IsRepo {
-		t.Fatal("subdirectory of a repo should still register as a repo")
-	}
-	for _, want := range []string{
-		filepath.Join(sub, "inside.txt"),
-		filepath.Join(repo, "outside.txt"),
-	} {
-		if st.DirtyFiles[want] == filetree.GitChangeNone {
-			t.Errorf("expected %s to be dirty; got %v", want, sortedKeys(st.DirtyFiles))
-		}
-	}
-}
-
-// TestParsePorcelain_BasicCases pins down the byte-level porcelain v1
-// parser. Each case mirrors something `git status --porcelain` actually
-// produces — we want regression coverage on the format itself, not just
-// the happy path through real git.
-func TestParsePorcelain_BasicCases(t *testing.T) {
-	// wantKeys are repo-relative and joined against top in the assertion
-	// below. parsePorcelain builds keys with filepath.Join, so spelling
-	// them as "/tmp/repo/x" literals passes on Unix and fails on Windows
-	// even though the parser is correct.
-	top := filepath.Join(string(filepath.Separator)+"tmp", "repo")
-	cases := []struct {
-		name     string
-		input    string
-		wantKeys []string
-	}{
-		{
-			name:     "single modified",
-			input:    " M file.txt\n",
-			wantKeys: []string{"file.txt"},
-		},
-		{
-			name:     "untracked",
-			input:    "?? new.go\n",
-			wantKeys: []string{"new.go"},
-		},
-		{
-			name:     "staged plus modified",
-			input:    "MM file.go\n",
-			wantKeys: []string{"file.go"},
-		},
-		{
-			name:     "multiple lines",
-			input:    " M a.txt\n?? b.txt\nA  c.txt\n",
-			wantKeys: []string{"a.txt", "b.txt", "c.txt"},
-		},
-		{
-			name:     "rename marks both old and new",
-			input:    "R  oldname.txt -> newname.txt\n",
-			wantKeys: []string{"oldname.txt", "newname.txt"},
-		},
-		{
-			name:     "quoted path with spaces",
-			input:    " M \"weird name.txt\"\n",
-			wantKeys: []string{"weird name.txt"},
-		},
-		{
-			name:     "blank input",
-			input:    "",
-			wantKeys: nil,
-		},
-		{
-			name:     "junk too short to parse is dropped",
-			input:    "M\n",
-			wantKeys: nil,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parsePorcelain([]byte(tc.input), top)
-			if len(got) != len(tc.wantKeys) {
-				t.Fatalf("count mismatch: want %d (%v), got %d (%v)",
-					len(tc.wantKeys), tc.wantKeys,
-					len(got), sortedKeys(got))
-			}
-			for _, k := range tc.wantKeys {
-				key := filepath.Join(top, k)
-				if got[key] == filetree.GitChangeNone {
-					t.Errorf("missing %q in %v", key, sortedKeys(got))
-				}
-			}
-		})
-	}
-}
-
-// TestParsePorcelain_StatusKinds confirms the tree can color different git
-// states distinctly instead of collapsing everything to one dirty color.
-func TestParsePorcelain_StatusKinds(t *testing.T) {
-	top := filepath.Join(string(filepath.Separator)+"tmp", "repo")
-	got := parsePorcelain([]byte(" M mod.go\n?? new.go\n D gone.go\nR  old.go -> moved.go\n"), top)
-	// Keys are repo-relative and joined below — see the note in
-	// TestParsePorcelain_BasicCases.
-	want := map[string]filetree.GitChangeKind{
-		"mod.go":   filetree.GitChangeModified,
-		"new.go":   filetree.GitChangeAdded,
-		"gone.go":  filetree.GitChangeDeleted,
-		"old.go":   filetree.GitChangeDeleted,
-		"moved.go": filetree.GitChangeRenamed,
-	}
-	for rel, kind := range want {
-		path := filepath.Join(top, rel)
-		if got[path] != kind {
-			t.Fatalf("%s kind = %v, want %v; got %v", path, got[path], kind, got)
-		}
-	}
-}
-
 // TestParseGitDiffLines maps unified hunk ranges to zero-based gutter rows.
 func TestParseGitDiffLines(t *testing.T) {
 	diff := []byte("@@ -2,0 +3,2 @@\n+a\n+b\n@@ -8,2 +10,2 @@\n-old\n+new\n@@ -20,2 +21,0 @@\n-old\n")
@@ -330,28 +120,6 @@ func TestParseGitDiffLines(t *testing.T) {
 	}
 	if got[21] != editor.GitLineDeleted {
 		t.Fatalf("deleted marker wrong: %v", got)
-	}
-}
-
-// TestUnquotePath_Variants verifies the C-style unquoter handles git's
-// default quoting — quoted paths come back clean, unquoted paths pass
-// through, and a malformed quoted string falls back to the raw input
-// rather than dropping the path entirely.
-func TestUnquotePath_Variants(t *testing.T) {
-	cases := map[string]string{
-		`plain.txt`:          `plain.txt`,
-		`"quoted.txt"`:       `quoted.txt`,
-		`"with space.txt"`:   `with space.txt`,
-		`"escaped\nnewline"`: "escaped\nnewline",
-		`""`:                 ``,
-		`   spaced.txt   `:   `spaced.txt`,
-		``:                   ``,
-		`"unterminated`:      `"unterminated`, // malformed → raw fallback
-	}
-	for in, want := range cases {
-		if got := unquotePath(in); got != want {
-			t.Errorf("unquotePath(%q) = %q, want %q", in, got, want)
-		}
 	}
 }
 

@@ -227,8 +227,9 @@ Full plan, with the research behind each decision:
 |---|---|---|
 | 0 | Fork, strip, blacken | **done** |
 | 1 | Inline (Zed-style) diff viewer | **done** |
-| 2 | Review notes + herdr/clipboard handoff | next |
-| 3 | Zed-shaped read-only git panel + branch checkout | |
+| 2 | Zed-shaped read-only git panel | **done** |
+| 3 | Review notes + herdr/clipboard handoff | next |
+| 3b | Branch checkout, off the panel footer | |
 | 4 | Multi-repo workspace | |
 | 5 | Content search + markdown renderer | |
 
@@ -270,13 +271,16 @@ gutter markers. Its `loadGitHunkPreview` / `parseGitHunkPreview` /
 replaced. `openInfo` in `modals.go` is now unused in production — phase 2
 wants it for herdr handoff errors, so it was left in place.
 
-### Git panel spec — transcribed from Zed
+### Git panel — as built
 
-Chase put Vincent and Zed side by side on the same repo and the panel is
-the whole visible gap. This is what Zed actually draws, read off that
-screenshot, and what Vincent's read-only version keeps or drops.
+Built ahead of the review composer, swapping the original phase 2/3 order.
+The panel is the front door to a review — without it there is no "what did
+the agent do" list and you hunt orange rows in the tree — and it gives the
+composer a home instead of a floating modal invented for it.
 
-Top to bottom, Zed's right-hand panel:
+Chase put Vincent and Zed side by side on the same repo and the panel was
+the whole visible gap. This is what Zed draws, read off that screenshot,
+and what Vincent's read-only version kept or dropped:
 
 | Zed | Vincent |
 |---|---|
@@ -298,9 +302,29 @@ change and hand it back". Same shape, same muscle memory, opposite
 direction. Build the panel before the composer and phase 2 has a home
 instead of needing a floating modal invented for it.
 
-Row colours follow the tree's existing `GitChangeKind` palette so a file
-is the same colour in both places. Clicking a row opens that file's diff —
-`openDiff` already does exactly this and takes a path.
+Row colours follow the tree's `GitChangeKind` palette so a file is the same
+colour in both places. Clicking a row opens that file's diff.
+
+Things worth knowing before changing it:
+
+- **One `git status` run feeds both the tree and the panel.** The tree wants
+  a path -> kind map, the panel wants an ordered list; that difference is
+  exactly what tempts you into a second run and a second parser, and then
+  they drift and a file is orange in one place and absent from the other.
+  `gitentries.go` is the single parse. The older `parsePorcelain` was
+  deleted when the panel landed rather than left to rot beside it.
+- **`-z`, `--untracked-files=all`, `GIT_OPTIONAL_LOCKS=0`.** All three are
+  from the traps list and all three are load-bearing. A rename emits TWO
+  NUL-separated records — new path, then old — and a parser that walks
+  records uniformly reports a phantom file.
+- **Row rects are recorded during the draw**, and clicks test against that
+  snapshot. Do not recompute row arithmetic in the click handler.
+- **Hover is cleared by any event landing outside the panel.** Terminals
+  emit no "pointer left" event, so tying it to motion alone strands a lit
+  row when the mouse moves to the editor.
+- **The two side panels share one width budget** (`reflowPanels`). A
+  terminal resize re-clamps both before anything reads a rect; without it a
+  narrowed window leaves the editor at negative width.
 
 ### Phase 2 notes
 

@@ -54,6 +54,11 @@ func newTestApp(t *testing.T, root string) *App {
 		hoveredMenuRow: -1,
 		sidebarShown:   true,
 		sidebarWidth:   defaultSidebarWidth,
+		// Mirror the real constructors. A zero width here silently makes
+		// gitPanelW() return 0 even with the panel shown, so every panel
+		// test would assert against a panel that never drew.
+		gitPanelWidth: defaultGitPanelWidth,
+		gitPanelHover: -1,
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.width, a.height = scr.Size()
@@ -1598,19 +1603,19 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 // off-by-one in the layout helper is caught. The numbers dropped from
 // spice-edit's when Vincent went read-only: New file / Rename file /
 // Delete file / Rename folder / Delete folder left the File actions
-// group, taking five rows with them. Phase 1 then added the Review group
-// (View diff), which is one row plus its divider.
+// group, taking five rows with them. The Review group then arrived with
+// View diff and the changes-panel toggle.
 func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	items, dividers, h := a.menuLayout()
 
-	if h != 28 {
-		t.Errorf("modalHeight = %d, want 28", h)
+	if h != 29 {
+		t.Errorf("modalHeight = %d, want 29", h)
 	}
-	if got := len(items); got != 17 {
-		t.Errorf("item count = %d, want 17 built-ins", got)
+	if got := len(items); got != 18 {
+		t.Errorf("item count = %d, want 18 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 12, 15, 18, 23, 25}
+	wantDiv := []int{2, 6, 10, 13, 16, 19, 24, 26}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}

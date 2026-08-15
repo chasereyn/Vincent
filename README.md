@@ -53,6 +53,7 @@ tmux and terminal emulators. Leader keys are `Esc`-prefixed.
 |---|---|
 | `Esc Esc` | Action menu — every command, always |
 | `Esc d` | **Diff the active file** |
+| `Esc g` | **Show / hide the Changes panel** |
 | `Esc p` | Find file by name |
 | `Esc f` | Find in file |
 | `Esc t` | Show / hide the file tree |
@@ -62,6 +63,19 @@ tmux and terminal emulators. Leader keys are `Esc`-prefixed.
 Mouse: click a file to open it, click a tab to switch, click `×` to close,
 drag the splitter to resize the tree, scroll anywhere. Click a change bar
 in the gutter to jump straight into that change in the diff.
+
+### The Changes panel
+
+`Esc g` opens a read-only git panel down the right: a `Changes (N)` header,
+Tracked and Untracked sections, and one row per changed file — filename in
+its status colour, parent directory dimmed beside it so two files called
+`index.ts` are still distinguishable. Deleted files are struck through.
+Click any row to open its diff. The footer names the repo and branch.
+
+It is a navigator, not a stager. There are no checkboxes, no Stage All, and
+no commit box; writes belong to lazygit. Where Zed puts "describe this
+change and commit it", Vincent will put "describe this change and hand it
+back to the agent".
 
 ### Diffs
 
@@ -84,8 +98,8 @@ the last commit.
 |---|---|---|
 | 0 | Fork, strip, blacken | ✅ |
 | 1 | Inline diff viewer | ✅ |
-| 2 | Review notes + handoff back to the agent | next |
-| 3 | Read-only git panel + branch checkout | |
+| 2 | Read-only git panel | ✅ |
+| 3 | Review notes + handoff back to the agent | next |
 | 4 | Multi-repo workspace | |
 | 5 | Content search + markdown rendering | |
 
