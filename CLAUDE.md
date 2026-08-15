@@ -41,16 +41,23 @@ see `internal/app/pathops.go` for the pattern.
 
 ## Where it stands
 
-Phase 1 is done. Vincent renders inline, Zed-shaped diffs: dual old/new
-gutters, ± markers, full-width row tints, and a darker word-level tint on
-the part of a line that actually changed. Open one with `Esc d`, from the
-action menu, from a file's right-click menu in the tree, or by clicking a
-change bar in the editor's git gutter (which lands on that change in the
-diff). A diff tab refreshes itself when the file underneath it changes, so
-it tracks a running agent without losing your scroll position.
+Phases 0 through 2 are done. Vincent is usable for a real review pass:
+open a repo, hit `Esc g` for the Changes panel, click a file, read its
+diff. What is missing is the second half of the loop — writing a note and
+sending it back to the agent.
 
-Phase 0 before it: the fork builds, the suite is green on all three
-platforms, and every surface is black.
+- **Phase 2, the Changes panel.** Zed's shape, read-only: `Changes (N)`
+  header, Tracked and Untracked sections, filename in its status colour
+  with the parent directory dimmed beside it, deletions struck through, a
+  repo / branch footer. Click a row to open its diff. `Esc g`.
+- **Phase 1, inline diffs.** Dual old/new gutters, ± markers, full-width
+  row tints, and a darker word-level tint on the part of a line that
+  actually changed. `Esc d`, the action menu, a file's right-click entry,
+  or a click on a change bar in the editor's git gutter (which lands on
+  that change in the diff). A diff tab refreshes itself when the file
+  underneath changes, so it tracks a running agent without losing scroll.
+- **Phase 0.** The fork builds, the suite is green on all three platforms,
+  and every surface is black.
 
 Already stripped:
 
@@ -84,12 +91,14 @@ files above fall out.
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        2554  Event loop, layout rects, mouse dispatch, rendering
+internal/app/app.go        2641  Event loop, layout rects, mouse dispatch, rendering
 internal/app/modals.go     1081  Modal scaffolding — reuse for the review composer
 internal/app/finder.go      474  Fuzzy file-finder modal
-internal/app/gitstatus.go   343  git status shell-outs + porcelain parsing
+internal/app/gitpanel.go    452  The Changes panel: layout, rows, clicks
 internal/app/find.go        297  In-file find bar
+internal/app/gitentries.go  258  THE git status parse — tree and panel both
 internal/app/diffview.go    234  git diff shell-outs, diff tabs, live refresh
+internal/app/gitstatus.go   221  Branch, gutter markers, dirty-folder rollup
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
 internal/app/leader.go       66  Esc-prefixed key bindings
 internal/editor/tab.go      846  Tab: buffer, cursor, scroll, hit-test  <- still mutable
@@ -121,6 +130,8 @@ trade them away for convenience.
    out to deliberately.
 4. **Read-only.** One exception, `git checkout`, because branch switching
    was asked for by name. Everything else that mutates belongs to lazygit.
+   The Changes panel is where this pressure will show up first — resist
+   adding staging checkboxes to it.
 
 ## Build
 
