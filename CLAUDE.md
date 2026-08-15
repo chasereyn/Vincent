@@ -230,6 +230,20 @@ Each of these cost someone real time to find. Do not regress them.
 - **macOS Terminal + tmux** swallows right-click — hence the menu rule above.
 - **Shift+mouse must no-op** so the terminal's own native selection and
   copy still work.
+- **A raw-mode TUI does not die with its terminal.** tcell puts the console
+  in raw mode — correct, since a TUI wants Ctrl+C as a keypress rather than
+  as "terminate" — but that opts the process out of console control events,
+  and the main loop then blocks in `PollEvent` on a console that is gone.
+  Closing the terminal left `vincent.exe` running forever, which on Windows
+  also locks the binary so the next `make install` fails. `shutdown.go`
+  handles the signals AND hard-exits after a grace period; the second half
+  is not optional, because taking over SIGTERM without guaranteeing an exit
+  converts a reliable kill into a hang.
+- **Esc-leader needs a visible armed state and a generous window.** At
+  spice-edit's 500ms, `Esc q` routinely failed to quit: that is a typist's
+  reflex window, and Vincent is read one-handed with the other on the mouse.
+  A leader that silently expires reads as a broken keybinding. It is 1500ms
+  now and the status bar says when it is armed.
 
 Chase does **not** run Vincent under tmux — it gets a full monitor of its
 own, next to herdr. So the tmux-specific constraints are belt-and-braces

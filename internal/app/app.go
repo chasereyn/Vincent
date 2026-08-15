@@ -52,9 +52,19 @@ const (
 	minHeight            = 24
 	statusFlashFor       = 3 * time.Second
 	doubleClickMs        = 500 * time.Millisecond
-	doubleEscMs          = 500 * time.Millisecond
-	wheelLines           = 3
-	wheelCols            = 6 // horizontal step per WheelLeft/WheelRight event
+	// doubleEscMs is how long an Esc stays "armed" — both for the Esc-Esc
+	// double-tap that opens the menu and for the Esc-<letter> leader keys.
+	//
+	// Raised from spice-edit's 500ms after Esc-q failed to quit for the
+	// person this is built for. Half a second is a typist's reflex window,
+	// and Vincent is deliberately NOT driven by typing: you are reading, one
+	// hand on the mouse, and the second key comes when it comes. A leader
+	// that silently expires reads as a broken keybinding, and the status bar
+	// now says when it is armed (see drawStatusBar) so the window is
+	// visible rather than guessed at.
+	doubleEscMs = 1500 * time.Millisecond
+	wheelLines  = 3
+	wheelCols   = 6 // horizontal step per WheelLeft/WheelRight event
 
 	// modifierStickyWindow is how long a previously-seen Shift modifier
 	// state is allowed to persist forward onto the next wheel event.
@@ -433,6 +443,10 @@ type App struct {
 	// an unrelated future modal.
 	confirmCancelHook func(*App)
 
+	// signalStop is the channel startSignalWatch registered for Ctrl+C and
+	// SIGTERM. Held so a normal exit can unregister it. See shutdown.go.
+	signalStop chan os.Signal
+
 	quit bool
 }
 
@@ -475,6 +489,7 @@ func New(rootDir string) (*App, error) {
 	a.applyStartupPanelDefaults()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
+	a.startSignalWatch()
 	// Kick off the project file index in the background so that by
 	// the time the user hits Esc-p (or ≡ → Find file) the modal can
 	// open with results already in hand. On a 50k-file repo this
@@ -536,6 +551,9 @@ func NewSingleFile(filePath string) (*App, error) {
 	// `git diff`), so single-file mode shows change bars on open without
 	// the whole-repo status or tree walk that New performs.
 	a.openFile(filePath)
+	// Single-file mode skips the tree and the finder, but NOT this: an
+	// orphaned process is just as unkillable either way.
+	a.startSignalWatch()
 	return a, nil
 }
 
@@ -648,6 +666,7 @@ func (a *App) stopTreeRefresh() {
 
 // Close releases the terminal back to the user. Always call this before exit.
 func (a *App) Close() {
+	a.stopSignalWatch()
 	a.stopTreeRefresh()
 	a.stopAutoScroll()
 	if a.screen != nil {
@@ -690,6 +709,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleMouse(e)
 	case *autoScrollEvent:
 		a.handleAutoScroll()
+	case *quitEvent:
+		// Posted by the signal watcher. Setting the flag here rather than
+		// from its goroutine keeps every write to UI state on the main
+		// thread.
+		a.quit = true
 	case *treeRefreshEvent:
 		a.refreshTreeNow()
 	case *finderRebuiltEvent:
@@ -1883,6 +1907,13 @@ func (a *App) updateMenuHover(x, y int) {
 	}
 }
 
+// leaderArmed reports whether an Esc is currently waiting for a second key.
+// Drives the status-bar hint so the leader window is something the user can
+// see rather than something they have to time blind.
+func (a *App) leaderArmed() bool {
+	return !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs
+}
+
 // hasTab reports whether there is an active tab to act on.
 func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 
@@ -2412,8 +2443,15 @@ func (a *App) drawStatusBar() {
 		}
 	}
 
-	// Left-side text: status flash, file info, or root dir.
+	// Left-side text: an armed Esc outranks everything else. Without this
+	// the leader is invisible state — you press Esc, nothing appears to
+	// happen, and whether the next key is a command or a keystroke depends
+	// on a timer you cannot see.
 	var left string
+	if a.leaderArmed() {
+		drawStatusText(a.screen, sx, sy, sw-rightWidth, " Esc — d diff · g changes · p find file · f find · t tree · w close · q quit", style)
+		return
+	}
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
 		left = " " + a.statusMsg
 	} else if tab := a.activeTabPtr(); tab != nil {
