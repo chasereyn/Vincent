@@ -136,7 +136,8 @@ trade them away for convenience.
 ## Build
 
 ```sh
-make build        # ./bin/vincent
+make install      # build + copy to ~/.local/bin, which is on PATH
+make build        # ./bin/vincent (vincent.exe on Windows)
 make test         # go test ./...
 make build-mac    # darwin/arm64 cross-compile
 ```
@@ -144,6 +145,28 @@ make build-mac    # darwin/arm64 cross-compile
 `make`, `go`, and `git` come from scoop on this machine. There is no dev
 server — it is a TUI. To check UI behaviour, build and run it against a
 real directory.
+
+**Test build changes from PowerShell, not just from Git Bash.** Chase's
+primary shell is PowerShell; an agent's shell tool is usually Git Bash.
+Three separate bugs shipped because of that gap, and none of them
+reproduce in Git Bash:
+
+- GNU make finds a POSIX shell on PATH under Git Bash and falls back to
+  **cmd.exe** under PowerShell, where `mkdir -p bin` becomes "A
+  subdirectory or file -p already exists". The Makefile now points SHELL at
+  Git's own `usr/bin/sh.exe` and prepends that directory to PATH — make
+  bypasses SHELL for commands with no metacharacters, so the coreutils have
+  to be resolvable as executables too.
+- **`HOME` is unset in PowerShell** (Windows uses `USERPROFILE`), so
+  `$(HOME)/.local/bin` resolved to `/.local/bin` and the install failed far
+  from its cause.
+- `go build -o bin/vincent` produces an extensionless file that is a valid
+  PE binary but that Windows refuses to execute, silently, because PATHEXT
+  does not list it. `BINARY` carries `go env GOEXE` for this.
+
+Related: **Windows locks a running executable**, so `make install` fails
+while Vincent is open. That one is expected — the target explains it and
+tells you to quit first.
 
 `make test` runs **without** `-race` on purpose. The race detector needs
 cgo, and this machine builds with `CGO_ENABLED=0` — no C compiler, which

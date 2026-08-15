@@ -6,6 +6,46 @@
 # The website targets are gone — Vincent has no site to build.
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# Windows shell resolution. Must come before anything that runs $(shell ...).
+# -----------------------------------------------------------------------------
+#
+# GNU make on Windows uses cmd.exe unless it finds a POSIX shell on PATH.
+# In a PowerShell session it does not: Git ships sh.exe under usr/bin, but
+# only Git's cmd/ directory is on PATH. Every recipe here is POSIX, so the
+# first one fails with the memorable
+#
+#     mkdir -p bin
+#     A subdirectory or file -p already exists.
+#
+# and it only reproduces from PowerShell — from Git Bash sh.exe IS on PATH
+# and everything works, which is a good way to ship this bug without seeing
+# it.
+#
+# Rather than rewrite every recipe in cmd syntax, point make at Git's own
+# shell. PATH matters too: make skips SHELL entirely for commands with no
+# shell metacharacters, running them via CreateProcess, so mkdir / cp / rm
+# have to be findable as executables in their own right.
+#
+# The candidates are spelled in 8.3 short form (PROGRA~1) because make
+# cannot handle a SHELL path containing spaces.
+ifeq ($(OS),Windows_NT)
+POSIX_SH_CANDIDATES := \
+	C:/PROGRA~1/Git/usr/bin/sh.exe \
+	C:/PROGRA~2/Git/usr/bin/sh.exe \
+	$(subst \,/,$(LOCALAPPDATA))/Programs/Git/usr/bin/sh.exe \
+	$(subst \,/,$(USERPROFILE))/scoop/apps/git/current/usr/bin/sh.exe
+POSIX_SH := $(firstword $(foreach c,$(POSIX_SH_CANDIDATES),$(wildcard $(c))))
+ifneq ($(POSIX_SH),)
+SHELL := $(POSIX_SH)
+export PATH := $(patsubst %/,%,$(dir $(POSIX_SH)));$(PATH)
+else
+$(warning No POSIX shell found, so make will fall back to cmd.exe and every)
+$(warning recipe here will fail. Run make from Git Bash instead, or install)
+$(warning Git for Windows so that usr/bin/sh.exe exists.)
+endif
+endif
+
 # NOTE: every @echo in this file is plain ASCII on purpose. make writes UTF-8
 # bytes straight to the console, and the Windows console is cp1252 by default
 # — an em-dash comes out as mojibake. Comments can use whatever they like;
@@ -18,10 +58,20 @@
 EXE := $(shell go env GOEXE)
 BINARY := vincent$(EXE)
 
+# HOME is not set in a PowerShell session — Windows uses USERPROFILE — so a
+# bare $(HOME)/.local/bin resolves to "/.local/bin" there, and the install
+# fails somewhere far from the cause. Git Bash DOES set HOME, so this only
+# breaks in the shell the previous version was never tested in.
+ifeq ($(HOME),)
+HOME_DIR := $(subst \,/,$(USERPROFILE))
+else
+HOME_DIR := $(HOME)
+endif
+
 # INSTALL_DIR is where `make install` puts the binary. ~/.local/bin rather
 # than GOPATH/bin because that is what is actually on PATH on this machine.
 # Override on the command line if yours differs: make install INSTALL_DIR=...
-INSTALL_DIR ?= $(HOME)/.local/bin
+INSTALL_DIR ?= $(HOME_DIR)/.local/bin
 
 .PHONY: run build install build-linux build-mac test test-race test-short coverage tidy clean help
 
@@ -46,9 +96,14 @@ help:
 run:
 	go run .
 
+# bin is an order-only prerequisite of every build target: make creates it
+# once, only when missing. This avoids `mkdir -p`, whose -p flag cmd.exe
+# reads as a directory NAME rather than a flag.
+bin:
+	mkdir bin
+
 # build produces a single binary at ./bin/$(BINARY).
-build:
-	mkdir -p bin
+build: | bin
 	go build -o bin/$(BINARY) .
 
 # install builds and copies the binary to INSTALL_DIR (~/.local/bin by
@@ -69,15 +124,13 @@ install: build
 	@echo "Run 'vincent' from any directory."
 
 # build-linux cross-compiles a fully static linux/amd64 binary.
-build-linux:
-	mkdir -p bin
+build-linux: | bin
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags='-s -w' -o bin/$(BINARY)-linux-amd64 .
 
 # build-mac cross-compiles for Apple Silicon. Present because this repo is
 # developed on Windows today and moves to macOS later — verifying the
 # cross-compile keeps working is the point of having the target.
-build-mac:
-	mkdir -p bin
+build-mac: | bin
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags='-s -w' -o bin/$(BINARY)-darwin-arm64 .
 
 # test runs the full suite. Deliberately WITHOUT -race: the race detector
