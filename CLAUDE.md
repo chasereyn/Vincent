@@ -197,6 +197,12 @@ Each of these cost someone real time to find. Do not regress them.
 - **Shift+mouse must no-op** so the terminal's own native selection and
   copy still work.
 
+Chase does **not** run Vincent under tmux — it gets a full monitor of its
+own, next to herdr. So the tmux-specific constraints are belt-and-braces
+rather than load-bearing. Keep them anyway: the no-`Ctrl+` rule and the
+right-click mirroring rule both hold for bare terminal emulators too, and
+macOS Terminal is coming.
+
 ## Cross-platform
 
 Developed on Windows now, moving to macOS. CI runs Linux, macOS, **and
@@ -263,6 +269,38 @@ gutter markers. Its `loadGitHunkPreview` / `parseGitHunkPreview` /
 `lineInHunk` trio went away with the info-modal hunk preview the diff view
 replaced. `openInfo` in `modals.go` is now unused in production — phase 2
 wants it for herdr handoff errors, so it was left in place.
+
+### Git panel spec — transcribed from Zed
+
+Chase put Vincent and Zed side by side on the same repo and the panel is
+the whole visible gap. This is what Zed actually draws, read off that
+screenshot, and what Vincent's read-only version keeps or drops.
+
+Top to bottom, Zed's right-hand panel:
+
+| Zed | Vincent |
+|---|---|
+| `Changes (5)` / `History` tabs | `Changes (N)` only — History is a later idea, not v1 |
+| `± View Diff` · filter icon · `Stage All ⌄` | drop the whole toolbar row |
+| `Tracked` section header | keep |
+| row: filename, dimmed parent dir beside it | keep — the dimmed parent is what disambiguates two `index.ts` |
+| deleted files struck through | keep, it reads instantly |
+| per-row checkbox (staging) | drop |
+| `Untracked` section header | keep |
+| `⑂ Sarita / main` + `⟳ Fetch ⌄` | keep the repo/branch row; it becomes the branch switcher |
+| commit message box | **this is where the review batch goes** |
+| `Commit Tracked ⌄` | becomes `Send to agent` |
+| last-commit-message recall row | drop |
+
+The substitution in the last three rows is the point. Zed's panel ends in
+"describe this change and commit it"; Vincent's ends in "describe this
+change and hand it back". Same shape, same muscle memory, opposite
+direction. Build the panel before the composer and phase 2 has a home
+instead of needing a floating modal invented for it.
+
+Row colours follow the tree's existing `GitChangeKind` palette so a file
+is the same colour in both places. Clicking a row opens that file's diff —
+`openDiff` already does exactly this and takes a path.
 
 ### Phase 2 notes
 
