@@ -432,3 +432,48 @@ func TestTruncateLeft(t *testing.T) {
 		}
 	}
 }
+
+// TestStartupDefault_PanelOpenInARepo pins the default. Vincent exists to
+// answer "what did the agent just do", and making that a keypress away
+// turns the first question of every session into a navigation problem.
+func TestStartupDefault_PanelOpenInARepo(t *testing.T) {
+	requireGit(t)
+	dir := initRepo(t)
+	writeFileT(t, filepath.Join(dir, "a.txt"), "x\n")
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "seed")
+	writeFileT(t, filepath.Join(dir, "a.txt"), "changed\n")
+
+	a := newTestApp(t, dir)
+	a.refreshGitStatus()
+	a.applyStartupPanelDefaults()
+
+	if !a.gitPanelShown {
+		t.Error("a repo should open with the Changes panel visible")
+	}
+	// The layout must be re-clamped as part of the same step, or the first
+	// draw reads rects computed for a window without a panel in it.
+	_, _, ew, _ := a.editorRect()
+	if ew+a.sidebarW()+a.gitPanelW() != a.width {
+		t.Errorf("panes total %d, want the full width %d",
+			ew+a.sidebarW()+a.gitPanelW(), a.width)
+	}
+}
+
+// TestStartupDefault_PanelHiddenOutsideARepo keeps a third of the window
+// from being spent saying there is no repository. Esc-g still shows that
+// state on demand.
+func TestStartupDefault_PanelHiddenOutsideARepo(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.refreshGitStatus()
+	a.applyStartupPanelDefaults()
+
+	if a.gitPanelShown {
+		t.Error("a non-repo directory should open with the panel hidden")
+	}
+	_, _, ew, _ := a.editorRect()
+	if ew != a.width-a.sidebarW() {
+		t.Errorf("editor width = %d, want the full remainder %d — the hidden panel still took space",
+			ew, a.width-a.sidebarW())
+	}
+}

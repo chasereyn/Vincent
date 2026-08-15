@@ -472,6 +472,7 @@ func New(rootDir string) (*App, error) {
 	a.setActiveFolder(tree.Root.Path)
 	a.loadUserConfig()
 	a.refreshGitStatus()
+	a.applyStartupPanelDefaults()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
 	// Kick off the project file index in the background so that by

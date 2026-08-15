@@ -188,6 +188,23 @@ func (a *App) gitPanelListH() int {
 // Actions
 // -----------------------------------------------------------------------------
 
+// applyStartupPanelDefaults decides whether the Changes panel is open when
+// Vincent starts, and re-clamps the layout for whichever answer it gives.
+//
+// Open, in a repository. Vincent exists to answer "what did the agent just
+// do", and putting that behind a keypress makes the first question of every
+// session a navigation problem — Zed ships its panel open for the same
+// reason. Outside a repository there is nothing to put in it, and spending
+// a third of the window to say "Not a git repository" is worse than saying
+// nothing; `Esc g` still shows that state on demand.
+//
+// Split out of New so it can be tested: New builds a real tcell screen and
+// cannot run under `go test`.
+func (a *App) applyStartupPanelDefaults() {
+	a.gitPanelShown = a.gitSnap.IsRepo
+	a.reflowPanels()
+}
+
 // menuToggleGitPanel shows or hides the Changes panel.
 func (a *App) menuToggleGitPanel() {
 	a.closeMenu()
