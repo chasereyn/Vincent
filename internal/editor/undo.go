@@ -144,18 +144,24 @@ func (t *Tab) breakUndoGroup() {
 // CanUndo reports whether there is anything to roll back. The action
 // menu uses this to enable / disable the Undo row.
 func (t *Tab) CanUndo() bool {
-	return len(t.undoStack) > 0
+	return !t.ReadOnly() && len(t.undoStack) > 0
 }
 
 // CanRedo reports whether a previously undone change can be re-applied.
 func (t *Tab) CanRedo() bool {
-	return len(t.redoStack) > 0
+	return !t.ReadOnly() && len(t.redoStack) > 0
 }
 
 // CanRevert reports whether the buffer differs from the original state
 // captured at NewTab / Reload time. Used to gate the Revert menu row.
+//
+// Read-only tabs answer false unconditionally. A diff tab's buffer is
+// REPLACED wholesale when the diff refreshes, which the line-by-line
+// comparison below would read as "the user has edits to roll back" — and
+// reverting would then restore the previous diff's text into the buffer
+// while DiffRows kept the new one, desynchronising the two.
 func (t *Tab) CanRevert() bool {
-	if t.Buffer == nil {
+	if t.Buffer == nil || t.ReadOnly() {
 		return false
 	}
 	if len(t.Buffer.Lines) != len(t.undoOriginal.Lines) {

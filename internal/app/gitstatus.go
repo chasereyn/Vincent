@@ -258,56 +258,6 @@ func loadGitLineChanges(rootDir, path string) map[int]editor.GitLineChange {
 	return parseGitDiffLines(out)
 }
 
-// loadGitHunkPreview returns the unified diff hunk covering zero-based line.
-func loadGitHunkPreview(rootDir, path string, line int) []string {
-	if rootDir == "" || path == "" || line < 0 {
-		return nil
-	}
-	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=3", "HEAD", "--", path).Output()
-	if err != nil || len(out) == 0 {
-		return nil
-	}
-	return parseGitHunkPreview(out, line)
-}
-
-// parseGitHunkPreview extracts the diff hunk covering zero-based line.
-func parseGitHunkPreview(out []byte, line int) []string {
-	target := line + 1
-	var current []string
-	match := false
-	flush := func() []string {
-		if match && len(current) > 0 {
-			return current
-		}
-		return nil
-	}
-	for _, raw := range bytes.Split(out, []byte{'\n'}) {
-		text := string(raw)
-		if strings.HasPrefix(text, "@@ ") {
-			if hunk := flush(); hunk != nil {
-				return hunk
-			}
-			_, _, newStart, newCount, ok := parseHunkHeader(text)
-			current = []string{text}
-			match = ok && lineInHunk(target, newStart, newCount)
-			continue
-		}
-		if len(current) == 0 {
-			continue
-		}
-		current = append(current, text)
-	}
-	return flush()
-}
-
-// lineInHunk reports whether target one-based line belongs to a new-file range.
-func lineInHunk(target, start, count int) bool {
-	if count == 0 {
-		return target == start
-	}
-	return target >= start && target < start+count
-}
-
 // parseGitDiffLines converts unified diff hunks into editor gutter markers.
 func parseGitDiffLines(out []byte) map[int]editor.GitLineChange {
 	changes := map[int]editor.GitLineChange{}

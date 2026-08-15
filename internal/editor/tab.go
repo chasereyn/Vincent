@@ -17,6 +17,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/chasereyn/vincent/internal/diff"
 	"github.com/chasereyn/vincent/internal/theme"
 )
 
@@ -102,14 +103,21 @@ type Tab struct {
 	lastUndoGroup undoGroup
 	lastUndoAt    time.Time
 
-	// Mode is "" for a normal text tab and imageMode (= "image") for a
-	// read-only image preview. Image tabs reuse the Tab type so the
-	// app's tab list, switcher, and modal-routing all just work — the
-	// content-mutating methods short-circuit on imageMode and Render
-	// delegates to renderImage. See image.go for the render path.
+	// Mode is "" for a normal text tab, imageMode (= "image") for a
+	// read-only image preview, and diffMode (= "diff") for an inline
+	// diff. Non-text tabs reuse the Tab type so the app's tab list,
+	// switcher, and modal-routing all just work — the content-mutating
+	// methods short-circuit on Mode and Render delegates to the mode's
+	// own painter. See image.go and diffview.go for the render paths.
 	Mode     string
 	Image    image.Image // populated when Mode == imageMode
 	ImageFmt string      // "png" / "jpeg" / "gif" — for the status bar
+
+	// DiffRows is the parsed diff, populated when Mode == diffMode. It
+	// runs parallel to Buffer.Lines — row i of the diff is line i of the
+	// buffer — which is what lets scrolling, clamping, and the find bar
+	// operate on a diff tab without knowing it is one. See diffview.go.
+	DiffRows []diff.Row
 
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and
@@ -200,21 +208,32 @@ func (t *Tab) IsImage() bool {
 }
 
 // DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
+// A diff tab appends "±" so a file and its diff are distinguishable in the
+// tab bar — both carry the same Path, and both can be open at once.
 func (t *Tab) DisplayName() string {
 	if t.Path == "" {
 		return "untitled"
 	}
-	return filepath.Base(t.Path)
+	name := filepath.Base(t.Path)
+	if t.IsDiff() {
+		return name + " ±"
+	}
+	return name
 }
 
 // Save writes the buffer to disk and clears Dirty. It is an error to call
 // Save on an untitled tab — callers should prompt for a path first. Mtime
 // is refreshed so the disk-reconcile loop doesn't immediately think the
-// file we just wrote was changed by someone else. Image tabs return an
-// error since the editor only knows how to read those, not re-encode them.
+// file we just wrote was changed by someone else.
+//
+// Every non-text mode refuses outright. This is the last line of defence
+// rather than a convenience: a diff tab carries the real file's Path, so a
+// Save that got this far would write "+added" and "-removed" lines straight
+// over the user's source. The menu already hides the row (hasSavableTab),
+// but the check belongs here too, where the write actually happens.
 func (t *Tab) Save() error {
-	if t.IsImage() {
-		return fmt.Errorf("image tabs are read-only")
+	if t.ReadOnly() {
+		return fmt.Errorf("%s tabs are read-only", t.Mode)
 	}
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
@@ -300,7 +319,7 @@ func (t *Tab) SelectionText() string {
 // DeleteSelection removes the selected range and collapses the cursor to the
 // start of the selection. A no-op when nothing is selected.
 func (t *Tab) DeleteSelection() {
-	if t.IsImage() || !t.HasSelection() {
+	if t.ReadOnly() || !t.HasSelection() {
 		return
 	}
 	// Selection deletes are always their own undo step — they can wipe
@@ -321,7 +340,7 @@ func (t *Tab) DeleteSelection() {
 // structural undo step — pasted text or "\n" presses shouldn't merge
 // with the surrounding typing burst. No-op on image tabs.
 func (t *Tab) InsertString(s string) {
-	if t.IsImage() {
+	if t.ReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -344,7 +363,7 @@ func (t *Tab) InsertString(s string) {
 // into a single undo step rather than one entry per keystroke. No-op
 // on image tabs.
 func (t *Tab) InsertRune(r rune) {
-	if t.IsImage() {
+	if t.ReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -365,7 +384,7 @@ func (t *Tab) InsertRune(r rune) {
 // Coalesces with adjacent backspaces inside the undo window. No-op on
 // image tabs.
 func (t *Tab) Backspace() {
-	if t.IsImage() {
+	if t.ReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -394,7 +413,7 @@ func (t *Tab) Backspace() {
 // Coalesces with adjacent forward-deletes inside the undo window. No-op
 // on image tabs.
 func (t *Tab) Delete() {
-	if t.IsImage() {
+	if t.ReadOnly() {
 		return
 	}
 	if t.HasSelection() {
@@ -509,11 +528,23 @@ func (t *Tab) SelectAll() {
 	t.breakUndoGroup()
 }
 
+// gutterCells is the width of everything drawn to the left of the content
+// column: the line-number field plus its pad for a text tab, and the two
+// number fields plus the ± marker for a diff. Anything converting between
+// screen columns and buffer columns has to agree on this number, so it
+// lives in one place.
+func (t *Tab) gutterCells() int {
+	if t.IsDiff() {
+		return diffGutterCells(t.DiffRows)
+	}
+	return gutterWidthFor(t.Buffer.LineCount()) + 1
+}
+
 // EnsureVisible scrolls the viewport so the cursor is on screen. The
 // caller passes the editor area's width and height because the Tab itself
 // doesn't know its render rect.
 func (t *Tab) EnsureVisible(viewW, viewH int) {
-	contentW := viewW - gutterWidthFor(t.Buffer.LineCount()) - 1
+	contentW := viewW - t.gutterCells()
 	if contentW < 1 {
 		contentW = 1
 	}
@@ -543,6 +574,10 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if t.IsImage() {
 		t.renderImage(scr, th, x, y, w, h)
+		return
+	}
+	if t.IsDiff() {
+		t.renderDiff(scr, th, x, y, w, h)
 		return
 	}
 	// Only re-center on the cursor if the cursor moved this tick. Doing it
@@ -734,6 +769,9 @@ func gitLineMarkerColor(th theme.Theme, change GitLineChange) tcell.Color {
 // HitTest converts screen coordinates within this tab's render area to a
 // buffer position. ok=false means the click was outside any line.
 func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
+	if t.IsDiff() {
+		return t.diffHitTest(localX, localY, w, h)
+	}
 	if localY < 0 || localY >= h {
 		return Position{}, false
 	}

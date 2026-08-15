@@ -41,9 +41,16 @@ see `internal/app/pathops.go` for the pattern.
 
 ## Where it stands
 
-Phase 0 is done: the fork builds, the full suite is green on Windows, and
-every surface is black. Nothing Vincent-specific has been built yet — what
-exists is spice-edit with its editing half removed.
+Phase 1 is done. Vincent renders inline, Zed-shaped diffs: dual old/new
+gutters, ± markers, full-width row tints, and a darker word-level tint on
+the part of a line that actually changed. Open one with `Esc d`, from the
+action menu, from a file's right-click menu in the tree, or by clicking a
+change bar in the editor's git gutter (which lands on that change in the
+diff). A diff tab refreshes itself when the file underneath it changes, so
+it tracks a running agent without losing your scroll position.
+
+Phase 0 before it: the fork builds, the suite is green on all three
+platforms, and every surface is black.
 
 Already stripped:
 
@@ -63,23 +70,36 @@ buffer read-only is a **design task**, not a deletion. Decide what `Tab`
 becomes first (an immutable view over `[]string`?), then the three files
 fall out on their own.
 
+Phase 1 answered half of that question without forcing the refactor:
+`Tab.Mode` already existed for image previews, so a diff is just another
+mode, and `Tab.ReadOnly()` (= `Mode != ""`) is now the single gate every
+mutation path checks. **Guard new mutations on `ReadOnly()`, never on
+`IsImage()`** — that was the actual bug phase 1 found: `Tab.Save()` checked
+only for images, and a diff tab carries the real file's `Path`, so saving
+one would have written diff text over the user's source. When the plain
+text path finally goes read-only, `ReadOnly()` becomes `true` and the three
+files above fall out.
+
 ## Architecture map
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        2507  Event loop, layout rects, mouse dispatch, rendering
-internal/app/modals.go     1073  Modal scaffolding — reuse for the review composer
+internal/app/app.go        2554  Event loop, layout rects, mouse dispatch, rendering
+internal/app/modals.go     1081  Modal scaffolding — reuse for the review composer
 internal/app/finder.go      474  Fuzzy file-finder modal
-internal/app/gitstatus.go   393  git status / diff shell-outs + porcelain parsing
+internal/app/gitstatus.go   343  git status shell-outs + porcelain parsing
 internal/app/find.go        297  In-file find bar
+internal/app/diffview.go    234  git diff shell-outs, diff tabs, live refresh
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
-internal/app/leader.go       65  Esc-prefixed key bindings
-internal/editor/tab.go      808  Tab: buffer, cursor, scroll, hit-test  <- still mutable
+internal/app/leader.go       66  Esc-prefixed key bindings
+internal/editor/tab.go      846  Tab: buffer, cursor, scroll, hit-test  <- still mutable
+internal/editor/diffview.go 363  Diff render: dual gutters, row + word tints
 internal/editor/highlight.go 185 Chroma -> per-rune []tcell.Style grid
 internal/filetree           585  Lazy tree, identity-preserving refresh, hit-test
 internal/finder             583  Filename index (git ls-files) + fzy-style scorer
+internal/diff               358  Unified-diff parser — no tcell, no git, pure
 internal/icons              390  Nerd Font glyphs per file type
-internal/theme              143  The palette. All surfaces pure black
+internal/theme              171  The palette. All surfaces pure black
 internal/config             133  ~/.config/vincent/config.json
 internal/clipboard           50  OSC 52 — works over SSH and through tmux
 ```
@@ -162,6 +182,10 @@ pattern. Do not assume local green means race-free.
 - **Drag-mode state machine (`app.go`).** One `dragMode` string field
   distinguishes splitter-drag from selection-drag. Add the git panel's
   border drag to it rather than inventing a parallel flag.
+- **`Tab.Mode` for non-text tabs (`image.go`, `diffview.go`).** A new kind
+  of view is a mode on `Tab`, not a new type — it inherits the tab list,
+  the switcher, and modal routing for free. `Render` and `HitTest`
+  dispatch on it; `ReadOnly()` gates every mutation.
 
 ## Terminal quirks already solved here
 
@@ -196,26 +220,49 @@ Full plan, with the research behind each decision:
 | Phase | What | Status |
 |---|---|---|
 | 0 | Fork, strip, blacken | **done** |
-| 1 | Inline (Zed-style) diff viewer | next |
-| 2 | Review notes + herdr/clipboard handoff | |
+| 1 | Inline (Zed-style) diff viewer | **done** |
+| 2 | Review notes + herdr/clipboard handoff | next |
 | 3 | Zed-shaped read-only git panel + branch checkout | |
 | 4 | Multi-repo workspace | |
 | 5 | Content search + markdown renderer | |
 
-Split (side-by-side) diffs come after phase 1's inline view lands — inline
-first was an explicit call.
+Split (side-by-side) diffs come after inline — inline first was an explicit
+call. The split view is a second painter over the same `[]diff.Row`;
+nothing in `internal/diff` should need to change for it.
 
-### Phase 1 notes
+### Phase 1 as built
 
-Port herdr-sidebar's `diffview.rs` (~300 lines, cloned at
-`~/Downloads/herdr-sidebar`): parse `@@` hunks from plain `git diff`,
-track old/new line counters, row tints, and a darker word-level tint on
-paired change lines. In-process — do not shell out to `delta`.
+Ported from herdr-sidebar's `src/diffview.rs`
+(`~/Downloads/herdr-sidebar/plugins/herdr-sidebar/src/diffview.rs`) and
+split in two: `internal/diff` parses, `internal/editor/diffview.go` draws.
+In-process — nothing shells out to `delta`.
 
-`gitstatus.go` already has the primitives: `parseHunkHeader`,
-`parseDiffRange`, `parseGitHunkPreview`, and a gutter-click that opens a
-hunk in a modal. The diff viewer is that logic promoted from a text modal
-to a real panel.
+Things worth knowing before changing any of it:
+
+- **A diff tab is a `Tab`, not a parallel type.** `Buffer.Lines` runs
+  parallel to `DiffRows`, which is why scroll, clamp, hit-test, and the
+  find bar work on a diff with no special cases in the app layer.
+- **A file and its diff are two tabs sharing one `Path`**, told apart by
+  `IsDiff()`. Anything that looks a tab up by path must say which it wants
+  — `openFile` does, and it must stay that way.
+- **`git diff <base>` where base is `HEAD`, or the empty-tree SHA in a repo
+  with no commits.** Untracked files fall through to
+  `git diff --no-index` against `os.DevNull`, but *only* after
+  `git ls-files --error-unmatch` says the file is untracked — running the
+  fallback unconditionally renders every clean file as one huge addition.
+- **Word-level tint pairs runs of deletions with the run of additions that
+  follows**, then compares common prefix/suffix. It is a heuristic, not a
+  character diff; a pair sharing nothing is left untinted rather than
+  claiming the whole line changed.
+- `git diff` output ends in a newline, so the final element of the split is
+  a terminator, not a line. Dropping it is what keeps the trailing line
+  numbers correct.
+
+`gitstatus.go` keeps `parseHunkHeader` / `parseDiffRange` for the editor's
+gutter markers. Its `loadGitHunkPreview` / `parseGitHunkPreview` /
+`lineInHunk` trio went away with the info-modal hunk preview the diff view
+replaced. `openInfo` in `modals.go` is now unused in production — phase 2
+wants it for herdr handoff errors, so it was left in place.
 
 ### Phase 2 notes
 

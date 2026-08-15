@@ -863,12 +863,20 @@ func (a *App) drawDirtyClose() {
 // openTreeContext opens a small right-click popup over the file tree, anchored
 // near (x, y). Vincent is a reviewer, not an editor, so this menu offers no
 // mutations — the create / rename / delete entries went away with fileops.go.
-// Phase 3 is where this grows the review-side entries (stage, view diff,
-// comment on file) that replace them.
+// Phase 3 is where it grows the remaining review-side entries (stage,
+// comment on file).
+//
+// "View diff" is offered on files only. It stays enabled on a clean file
+// rather than being hidden, because deciding otherwise would mean running
+// git on every right-click just to lay out a menu; a clean file flashes
+// "No changes" instead.
 func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	a.closeAllModals()
 
 	items := []contextItem{}
+	if n != nil && !n.IsDir {
+		items = append(items, contextItem{label: "View diff", action: ctxViewDiff})
+	}
 	items = append(items, contextItem{label: "Copy rel path", action: ctxCopyRelativePath})
 	items = append(items, contextItem{label: "Copy abs path", action: ctxCopyAbsolutePath})
 

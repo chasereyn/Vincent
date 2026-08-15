@@ -40,6 +40,22 @@ type Theme struct {
 	GitRenamed  tcell.Color
 	GitMixed    tcell.Color
 
+	// --- Diff viewer ---
+	// Row tints for the inline diff. The Add/Del pair paints the whole row;
+	// the *Word pair paints only the changed middle of a line that was
+	// edited in place, which is what makes a one-character change findable
+	// in a wall of red and green. The *Mark pair colours the ± column.
+	//
+	// These are backgrounds, not foregrounds: they sit UNDER syntax
+	// highlighting, so they have to stay dark enough that SynComment (the
+	// dimmest syntax colour) still reads on top of the word tint.
+	DiffAddBG     tcell.Color
+	DiffAddWordBG tcell.Color
+	DiffAddMark   tcell.Color
+	DiffDelBG     tcell.Color
+	DiffDelWordBG tcell.Color
+	DiffDelMark   tcell.Color
+
 	// FindMatch / FindCurrent paint search hits in the editor body.
 	// FindMatch is a soft tint applied to every match in the viewport;
 	// FindCurrent is the louder color drawn under the "active" match
@@ -115,6 +131,18 @@ func Default() Theme {
 		GitDeleted:  tcell.NewRGBColor(0xf7, 0x76, 0x8e),
 		GitRenamed:  tcell.NewRGBColor(0x7d, 0xcf, 0xf7),
 		GitMixed:    tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
+
+		// Diff. These are VS Code's dark diff-editor tints, by way of
+		// herdr-sidebar — the look Vincent was asked to match. They are
+		// deliberately NOT derived from GitAdded / GitDeleted above:
+		// those are foreground colours picked to be legible on black,
+		// and using them as row backgrounds would drown the code.
+		DiffAddBG:     tcell.NewRGBColor(0x20, 0x39, 0x28),
+		DiffAddWordBG: tcell.NewRGBColor(0x35, 0x59, 0x3d),
+		DiffAddMark:   tcell.NewRGBColor(0x8c, 0xc9, 0x8f),
+		DiffDelBG:     tcell.NewRGBColor(0x42, 0x22, 0x26),
+		DiffDelWordBG: tcell.NewRGBColor(0x6f, 0x30, 0x36),
+		DiffDelMark:   tcell.NewRGBColor(0xd1, 0x6d, 0x76),
 
 		// Find. FindMatch is a desaturated amber so it reads as "all
 		// hits" without competing with the syntax palette. FindCurrent

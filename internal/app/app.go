@@ -175,6 +175,10 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Redo", shortcut: "Esc r", action: (*App).menuRedo, enabled: (*App).hasRedo},
 			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
 		},
+		// Review
+		{
+			{label: "View diff", shortcut: "Esc d", action: (*App).menuViewDiff, enabled: (*App).hasDiffableTab},
+		},
 		// Search
 		{
 			{label: "Find in file", shortcut: "Esc f", action: (*App).menuFind, enabled: (*App).hasFindable},
@@ -693,6 +697,14 @@ func (a *App) reconcileOpenTabsWithDisk() {
 		if tab.Path == "" {
 			continue
 		}
+		if tab.IsDiff() {
+			// Diff tabs reconcile differently: there is no buffer to
+			// reload, nothing can be dirty, and a file disappearing is a
+			// legitimate diff (an all-deletions one) rather than the
+			// warning case it is for an open file.
+			a.reconcileDiffTab(tab)
+			continue
+		}
 		info, err := os.Stat(tab.Path)
 		if os.IsNotExist(err) {
 			if !tab.DiskGone {
@@ -970,6 +982,24 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	case tcell.KeyPgDn:
 		_, h := a.editorSize()
 		tab.MoveCursor(h, 0, extend)
+	case tcell.KeyEnter, tcell.KeyBackspace, tcell.KeyBackspace2,
+		tcell.KeyDelete, tcell.KeyTab, tcell.KeyRune:
+		// Everything above this point moves the caret; everything below
+		// changes the buffer. A read-only tab (a diff) takes the movement
+		// keys and drops the rest, so arrows and PgUp/PgDn navigate a diff
+		// exactly like they navigate a file.
+		if tab.ReadOnly() {
+			return
+		}
+		a.applyEditKey(tab, ev)
+	}
+}
+
+// applyEditKey performs the buffer mutation for an editing keystroke. Split
+// out of handleKey so the read-only guard above has a single thing to gate
+// rather than a run of cases each needing its own check.
+func (a *App) applyEditKey(tab *editor.Tab, ev *tcell.EventKey) {
+	switch ev.Key() {
 	case tcell.KeyEnter:
 		tab.InsertString("\n")
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -1305,21 +1335,24 @@ func (a *App) editorPress(x, y int) {
 	tab.MoveCursorTo(pos, false)
 }
 
-// openGitHunkAt opens a diff preview when the user clicks a gutter marker.
+// openGitHunkAt opens the file's inline diff, scrolled to the clicked line,
+// when the user clicks a change bar in the editor's git gutter. Returns true
+// when it handled the click so the caller skips normal cursor placement.
+//
+// spice-edit showed the hunk in a scrollable info modal here. Now that
+// Vincent has a real diff view there's no reason for a second, worse one:
+// the modal couldn't be scrolled alongside the file, couldn't be kept open,
+// and had nowhere to hang a review note. Phase 2 attaches comments to diff
+// rows, which the modal could never have supported.
 func (a *App) openGitHunkAt(tab *editor.Tab, localX, localY int) bool {
-	if localX != 0 || localY < 0 {
+	if localX != 0 || localY < 0 || tab.IsDiff() {
 		return false
 	}
 	line := tab.ScrollY + localY
 	if tab.GitLines[line] == editor.GitLineNone {
 		return false
 	}
-	lines := loadGitHunkPreview(a.rootDir, tab.Path, line)
-	if len(lines) == 0 {
-		a.openInfo("Git change", []string{"No git diff found for this line."})
-		return true
-	}
-	a.openInfo("Git change · "+filepath.Base(tab.Path), lines)
+	a.openDiffAtLine(tab.Path, line)
 	return true
 }
 
@@ -1534,7 +1567,10 @@ func (a *App) openFile(path string) {
 		a.tree.Reveal(path, listH)
 	}
 	for i, t := range a.tabs {
-		if t.Path == path {
+		// Mode matters as well as path: a file and its diff are separate
+		// tabs sharing one Path, and "open foo.go" must never land on the
+		// diff of foo.go.
+		if t.Path == path && !t.IsDiff() {
 			a.activeTab = i
 			t.GitLines = loadGitLineChanges(a.rootDir, t.Path)
 			return
@@ -1786,11 +1822,15 @@ func (a *App) updateMenuHover(x, y int) {
 func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 
 // hasSavableTab reports whether the active tab is one we can persist —
-// it must exist, have a path on disk, and not be a read-only image
-// preview. Used by Save and Save & Close.
+// it must exist, have a path on disk, and not be read-only. Used by Save
+// and Save & Close.
+//
+// The read-only check covers diffs as well as image previews, and it
+// matters more for diffs: a diff tab carries the real file's Path, so an
+// enabled Save row would offer to write the diff text over the source.
 func (a *App) hasSavableTab() bool {
 	t := a.activeTabPtr()
-	return t != nil && t.Path != "" && !t.IsImage()
+	return t != nil && t.Path != "" && !t.ReadOnly()
 }
 
 // hasFileTab reports whether the active tab is backed by a real file
@@ -1808,10 +1848,11 @@ func (a *App) hasSelection() bool {
 }
 
 // hasCommentableTab reports whether the active tab is editable text with a
-// known single-line comment marker.
+// known single-line comment marker. Read-only tabs are excluded: toggling a
+// comment on a diff row would edit the rendered diff, not the file.
 func (a *App) hasCommentableTab() bool {
 	t := a.activeTabPtr()
-	if t == nil || t.IsImage() {
+	if t == nil || t.ReadOnly() {
 		return false
 	}
 	_, ok := editor.LineCommentPrefix(t.Path)
@@ -2292,6 +2333,12 @@ func (a *App) drawStatusBar() {
 			b := tab.Image.Bounds()
 			left = fmt.Sprintf(" %s · %d×%d · %s",
 				strings.ToUpper(tab.ImageFmt), b.Dx(), b.Dy(), filepath.Base(tab.Path))
+		} else if tab.IsDiff() {
+			// The counts are the headline on a diff — "how big is this
+			// change" is the first thing a reviewer wants — so they lead,
+			// ahead of the position readout a file tab shows.
+			added, deleted := tab.DiffStats()
+			left = fmt.Sprintf(" Diff · +%d −%d · %s", added, deleted, filepath.Base(tab.Path))
 		} else {
 			lang := detectLangLabel(tab.Path)
 			dirty := ""

@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/chasereyn/vincent/internal/editor"
@@ -331,33 +330,6 @@ func TestParseGitDiffLines(t *testing.T) {
 	}
 	if got[21] != editor.GitLineDeleted {
 		t.Fatalf("deleted marker wrong: %v", got)
-	}
-}
-
-// TestParseGitHunkPreview_ReturnsClickedHunk keeps gutter-click previews scoped
-// to the hunk covering the clicked changed line.
-func TestParseGitHunkPreview_ReturnsClickedHunk(t *testing.T) {
-	diff := []byte("diff --git a/a.go b/a.go\n@@ -1,2 +1,2 @@\n old context\n-old\n+new\n@@ -20,1 +20,2 @@\n keep\n+added\n")
-	got := parseGitHunkPreview(diff, 20)
-	if len(got) == 0 {
-		t.Fatal("expected hunk preview")
-	}
-	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, "+added") {
-		t.Fatalf("expected clicked hunk, got %q", joined)
-	}
-	if strings.Contains(joined, "-old") {
-		t.Fatalf("preview included wrong hunk: %q", joined)
-	}
-}
-
-// TestLineInHunk_IncludesDeletionAnchor pins deleted-line marker matching.
-func TestLineInHunk_IncludesDeletionAnchor(t *testing.T) {
-	if !lineInHunk(12, 12, 0) {
-		t.Fatal("deleted-only hunk should match its anchor line")
-	}
-	if lineInHunk(13, 12, 0) {
-		t.Fatal("deleted-only hunk should not match unrelated lines")
 	}
 }
 

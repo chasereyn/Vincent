@@ -23,6 +23,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/chasereyn/vincent/internal/diff"
 	"github.com/chasereyn/vincent/internal/editor"
 	"github.com/chasereyn/vincent/internal/filetree"
 	"github.com/chasereyn/vincent/internal/icons"
@@ -1088,8 +1089,14 @@ func TestEditorPress_PlacesCaret(t *testing.T) {
 	}
 }
 
-// TestOpenGitHunkAt_OpensInfoOnMarker proves gutter markers are clickable.
-func TestOpenGitHunkAt_OpensInfoOnMarker(t *testing.T) {
+// TestOpenGitHunkAt_ConsumesMarkerClick proves gutter markers are clickable
+// and that the click is consumed rather than falling through to cursor
+// placement. Phase 1 replaced spice-edit's info modal here with the real
+// diff view; the modal assertion went with it. What the click opens is
+// covered by the diffview tests, which can seed a git repo — this one has
+// no repo, so loadDiffRows finds nothing and only the consumed-click
+// contract is observable.
+func TestOpenGitHunkAt_ConsumesMarkerClick(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "p.txt")
 	if err := os.WriteFile(target, []byte("hello\n"), 0644); err != nil {
@@ -1103,8 +1110,21 @@ func TestOpenGitHunkAt_OpensInfoOnMarker(t *testing.T) {
 	if !a.openGitHunkAt(tab, 0, 0) {
 		t.Fatal("expected gutter marker click to be handled")
 	}
-	if !a.confirmOpen || !a.confirmInfo {
-		t.Fatal("expected git hunk click to open info modal")
+	if a.confirmOpen {
+		t.Fatal("gutter click should no longer open a modal")
+	}
+}
+
+// TestOpenGitHunkAt_IgnoresDiffTab keeps the gutter click from recursing.
+// A diff tab has no git gutter, and treating column zero of one as a marker
+// click would re-open the diff of the file being diffed.
+func TestOpenGitHunkAt_IgnoresDiffTab(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab := editor.NewDiffTab("x.go", diff.Parse("@@ -1 +1 @@\n-a\n+b\n"))
+	tab.GitLines = map[int]editor.GitLineChange{0: editor.GitLineModified}
+
+	if a.openGitHunkAt(tab, 0, 0) {
+		t.Fatal("diff tabs should not handle gutter clicks")
 	}
 }
 
@@ -1578,18 +1598,19 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 // off-by-one in the layout helper is caught. The numbers dropped from
 // spice-edit's when Vincent went read-only: New file / Rename file /
 // Delete file / Rename folder / Delete folder left the File actions
-// group, taking five rows with them.
+// group, taking five rows with them. Phase 1 then added the Review group
+// (View diff), which is one row plus its divider.
 func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	items, dividers, h := a.menuLayout()
 
-	if h != 26 {
-		t.Errorf("modalHeight = %d, want 26", h)
+	if h != 28 {
+		t.Errorf("modalHeight = %d, want 28", h)
 	}
-	if got := len(items); got != 16 {
-		t.Errorf("item count = %d, want 16 built-ins", got)
+	if got := len(items); got != 17 {
+		t.Errorf("item count = %d, want 17 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 16, 21, 23}
+	wantDiv := []int{2, 6, 10, 12, 15, 18, 23, 25}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}

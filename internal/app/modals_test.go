@@ -450,14 +450,17 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 		return nil
 	}
 
-	wantLabels := []string{"Copy rel path", "Copy abs path"}
+	// Read-only entries only. "View diff" is a file-only addition from
+	// phase 1; nothing here creates, renames, or deletes anything.
+	copyLabels := []string{"Copy rel path", "Copy abs path"}
 	cases := []struct {
 		name string
 		node *filetree.Node
+		want []string
 	}{
-		{"folder", find("child")},
-		{"file", find("f.txt")},
-		{"root", a.tree.Root},
+		{"folder", find("child"), copyLabels},
+		{"file", find("f.txt"), append([]string{"View diff"}, copyLabels...)},
+		{"root", a.tree.Root, copyLabels},
 	}
 
 	for _, tc := range cases {
@@ -465,10 +468,10 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 		if !a.contextOpen {
 			t.Fatalf("%s: context should open", tc.name)
 		}
-		if len(a.contextItems) != len(wantLabels) {
-			t.Fatalf("%s context: got %d items, want %d", tc.name, len(a.contextItems), len(wantLabels))
+		if len(a.contextItems) != len(tc.want) {
+			t.Fatalf("%s context: got %d items, want %d", tc.name, len(a.contextItems), len(tc.want))
 		}
-		for i, w := range wantLabels {
+		for i, w := range tc.want {
 			if a.contextItems[i].label != w {
 				t.Fatalf("%s item %d label: got %q, want %q", tc.name, i, a.contextItems[i].label, w)
 			}
