@@ -27,11 +27,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/chasereyn/vincent/internal/clipboard"
+	"github.com/chasereyn/vincent/internal/config"
 	"github.com/chasereyn/vincent/internal/editor"
 	"github.com/chasereyn/vincent/internal/filetree"
 	"github.com/chasereyn/vincent/internal/finder"
 	"github.com/chasereyn/vincent/internal/icons"
-	"github.com/chasereyn/vincent/internal/spiceconfig"
 	"github.com/chasereyn/vincent/internal/theme"
 	"github.com/chasereyn/vincent/internal/version"
 )
@@ -154,7 +154,7 @@ type menuItemDef struct {
 
 // builtinMenuGroups returns the editor's built-in action groups in
 // display order. Custom actions loaded from
-// ~/.config/spiceedit/actions.json get prepended as their own group
+// ~/.config/vincent/actions.json get prepended as their own group
 // in menuLayout — they're not included here so toggling them on or
 // off doesn't require touching this table.
 //
@@ -182,11 +182,6 @@ func builtinMenuGroups() [][]menuItemDef {
 		},
 		// File actions
 		{
-			{shortcut: "Esc n", action: (*App).menuNewFile, enabled: alwaysTrue, labelFor: (*App).newFileLabel},
-			{label: "Rename file", action: (*App).menuRename, enabled: (*App).hasFileTab},
-			{label: "Delete file", action: (*App).menuDelete, enabled: (*App).hasFileTab},
-			{action: (*App).menuRenameFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).renameFolderLabel},
-			{action: (*App).menuDeleteFolder, enabled: (*App).hasActiveSubfolder, labelFor: (*App).deleteFolderLabel},
 			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileTab},
 			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileTab},
 		},
@@ -449,7 +444,7 @@ func New(rootDir string) (*App, error) {
 		sidebarWidth:   defaultSidebarWidth,
 	}
 	a.setActiveFolder(tree.Root.Path)
-	a.loadSpiceConfig()
+	a.loadUserConfig()
 	a.refreshGitStatus()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
 	a.startTreeRefresh()
@@ -466,7 +461,7 @@ func New(rootDir string) (*App, error) {
 	return a, nil
 }
 
-// NewSingleFile is the lean alternative to New for the "spiceedit
+// NewSingleFile is the lean alternative to New for the "vincent
 // somefile.md" invocation: no file tree, no project finder index,
 // no background tree-refresh goroutine, sidebar hidden. The user
 // asked for one file — we don't pay the cost of walking and watching
@@ -507,7 +502,7 @@ func NewSingleFile(filePath string) (*App, error) {
 		sidebarWidth:   defaultSidebarWidth,
 	}
 	a.setActiveFolder(rootDir)
-	a.loadSpiceConfig()
+	a.loadUserConfig()
 	// openFile loads the file's git gutter markers itself (a file-scoped
 	// `git diff`), so single-file mode shows change bars on open without
 	// the whole-repo status or tree walk that New performs.
@@ -515,14 +510,14 @@ func NewSingleFile(filePath string) (*App, error) {
 	return a, nil
 }
 
-// loadSpiceConfig reads ~/.config/spiceedit/config.json (if any),
+// loadUserConfig reads ~/.config/vincent/config.json (if any),
 // resolves the Nerd Fonts auto/on/off mode to a concrete bool via
 // icons.Resolve, and stamps the result onto the file tree so the
 // next render starts drawing glyphs (or doesn't). A malformed
 // config flashes a status message but never blocks startup — the
 // editor falls back to Defaults() and keeps going.
-func (a *App) loadSpiceConfig() {
-	cfg, err := spiceconfig.Load(spiceconfig.DefaultPath())
+func (a *App) loadUserConfig() {
+	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		a.flash("config: " + err.Error())
 	}
@@ -1508,7 +1503,7 @@ func (a *App) flash(msg string) {
 
 // OpenFile opens the file at path in a new tab — or switches to it if
 // it is already open. Exported so main.go can seed the editor with the
-// file the user named on the command line ("spiceedit foo.go"). Thin
+// file the user named on the command line ("vincent foo.go"). Thin
 // wrapper around openFile so internal callers keep using the lowercase
 // name and the public surface stays small.
 func (a *App) OpenFile(path string) { a.openFile(path) }
@@ -2090,7 +2085,7 @@ func (a *App) draw() {
 
 // iconsOn reports whether Nerd Font glyphs should render in places
 // outside the file tree (e.g. the tab bar). The single source of
-// truth is the file tree — App.loadSpiceConfig stamped the resolved
+// truth is the file tree — App.loadUserConfig stamped the resolved
 // auto/on/off decision onto t.IconsEnabled there, so consulting the
 // tree keeps tabs and tree perfectly in sync (turning icons off via
 // config.json hides them everywhere at once).
@@ -2269,7 +2264,7 @@ func (a *App) drawEmptyEditor() {
 func (a *App) drawStatusBar() {
 	sx, sy, sw, _ := a.statusRect()
 	bg := a.theme.StatusBG
-	fg := a.theme.BG
+	fg := a.theme.StatusFG
 	style := tcell.StyleDefault.Background(bg).Foreground(fg).Bold(true)
 	for cx := sx; cx < sx+sw; cx++ {
 		a.screen.SetContent(cx, sy, ' ', nil, style)

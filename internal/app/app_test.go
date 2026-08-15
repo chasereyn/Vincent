@@ -15,7 +15,6 @@
 package app
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/chasereyn/vincent/internal/customactions"
 	"github.com/chasereyn/vincent/internal/editor"
 	"github.com/chasereyn/vincent/internal/filetree"
 	"github.com/chasereyn/vincent/internal/icons"
@@ -468,84 +466,6 @@ func TestSidebarToggleLabel(t *testing.T) {
 	a.sidebarShown = false
 	if a.sidebarToggleLabel() != "Show file explorer" {
 		t.Fatalf("got %q", a.sidebarToggleLabel())
-	}
-}
-
-// TestNewFileLabel_Plain shows the bare label when the active folder is the
-// project root.
-func TestNewFileLabel_Plain(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	if got := a.newFileLabel(); got != "New file" {
-		t.Fatalf("root label: got %q", got)
-	}
-	a.activeFolder = ""
-	if got := a.newFileLabel(); got != "New file" {
-		t.Fatalf("empty folder label: got %q", got)
-	}
-}
-
-// TestNewFileLabel_SuffixForSubdir adds a "(in subdir)" suffix when the
-// active folder is under the project root.
-func TestNewFileLabel_SuffixForSubdir(t *testing.T) {
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "alpha")
-	if err := os.Mkdir(sub, 0755); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a := newTestApp(t, dir)
-	a.setActiveFolder(sub)
-	got := a.newFileLabel()
-	if !strings.HasPrefix(got, "New file (in ") {
-		t.Fatalf("expected 'New file (in ...)', got %q", got)
-	}
-	if !strings.Contains(got, "alpha") {
-		t.Fatalf("expected basename in label, got %q", got)
-	}
-}
-
-// TestNewFileLabel_TruncatesLongPaths keeps the trailing folder visible
-// when the relative path would otherwise overflow the modal.
-func TestNewFileLabel_TruncatesLongPaths(t *testing.T) {
-	dir := t.TempDir()
-	deep := filepath.Join(dir,
-		"this-is-a-rather-long-name", "and-another-very-long-name", "trailing")
-	if err := os.MkdirAll(deep, 0755); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a := newTestApp(t, dir)
-	a.setActiveFolder(deep)
-	got := a.newFileLabel()
-	if !strings.Contains(got, "trailing") {
-		t.Fatalf("expected trailing folder name preserved; got %q", got)
-	}
-	if !strings.Contains(got, "…") {
-		t.Fatalf("expected truncation ellipsis; got %q", got)
-	}
-}
-
-// TestRelativeFolderLabel covers the three branches: root, subdir, and a
-// non-relatable path.
-func TestRelativeFolderLabel(t *testing.T) {
-	dir := t.TempDir()
-	sub := filepath.Join(dir, "child")
-	if err := os.Mkdir(sub, 0755); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a := newTestApp(t, dir)
-
-	// Root → basename + sep.
-	rootLabel := a.relativeFolderLabel(a.rootDir)
-	if !strings.HasSuffix(rootLabel, string(filepath.Separator)) {
-		t.Fatalf("root missing trailing sep: %q", rootLabel)
-	}
-	if !strings.HasPrefix(rootLabel, filepath.Base(a.rootDir)) {
-		t.Fatalf("root should start with its basename: %q", rootLabel)
-	}
-
-	// Subdir → relative path.
-	subLabel := a.relativeFolderLabel(sub)
-	if subLabel != "child"+string(filepath.Separator) {
-		t.Fatalf("subdir label: got %q", subLabel)
 	}
 }
 
@@ -1654,22 +1574,22 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestMenuLayout_NoCustomActions pins down the baseline geometry: with
-// zero custom actions the modal still has seven built-in groups and the
-// height matches the expected layout total. Catches accidental
-// off-by-one regressions when someone tweaks the layout helper.
-func TestMenuLayout_NoCustomActions(t *testing.T) {
+// TestMenuLayout_Baseline pins down the modal geometry so an accidental
+// off-by-one in the layout helper is caught. The numbers dropped from
+// spice-edit's when Vincent went read-only: New file / Rename file /
+// Delete file / Rename folder / Delete folder left the File actions
+// group, taking five rows with them.
+func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.customActions = nil
 	items, dividers, h := a.menuLayout()
 
-	if h != 31 {
-		t.Errorf("modalHeight = %d, want 31", h)
+	if h != 26 {
+		t.Errorf("modalHeight = %d, want 26", h)
 	}
-	if got := len(items); got != 21 {
-		t.Errorf("item count = %d, want 21 built-ins", got)
+	if got := len(items); got != 16 {
+		t.Errorf("item count = %d, want 16 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 21, 26, 28}
+	wantDiv := []int{2, 6, 10, 13, 16, 21, 23}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1715,9 +1635,6 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		"Revert file":          "",
 		"Find in file":         "Esc f",
 		"Find file in project": "Esc p",
-		"New file":             "Esc n",
-		"Rename file":          "",
-		"Delete file":          "",
 		"Copy relative path":   "",
 		"Copy absolute path":   "",
 		"Copy selection":       "",
@@ -1816,344 +1733,6 @@ func screenLine(scr tcell.SimulationScreen, y int) string {
 		rs[x] = c.Runes[0]
 	}
 	return string(rs)
-}
-
-// TestMenuLayout_WithCustomActions checks the splice-before-Quit
-// behaviour: two custom actions land as their own group sitting
-// directly above the Quit row, with a divider on each side. Modal
-// height grows by 3 rows (2 items + 1 divider).
-func TestMenuLayout_WithCustomActions(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.customActions = []customactions.Action{
-		{Label: "Open on Rager", Command: "echo r"},
-		{Label: "Open on Cascade", Command: "echo c"},
-	}
-	items, _, h := a.menuLayout()
-
-	if h != 34 { // 31 + 2 items + 1 divider
-		t.Errorf("modalHeight = %d, want 34", h)
-	}
-	// Custom actions should be the second-to-last and third-to-last
-	// rows, with Quit as the final row.
-	last := len(items) - 1
-	if items[last].label != "Quit editor" {
-		t.Fatalf("last row = %q, want Quit editor", items[last].label)
-	}
-	if items[last-1].label != "Open on Cascade" {
-		t.Errorf("row above Quit = %q, want Open on Cascade", items[last-1].label)
-	}
-	if items[last-2].label != "Open on Rager" {
-		t.Errorf("two above Quit = %q, want Open on Rager", items[last-2].label)
-	}
-}
-
-// TestMenuLayout_CustomActionsAlwaysEnabled pins the rule that the
-// menu never disables a custom action — neither prompted ones (where
-// the form modal owns the file-or-no-file question) nor plain ones
-// (whose commands may not touch $FILE at all, like "brew upgrade").
-// Trying to gate prompt-less actions on hasFileTab guessed wrong
-// for actions like Upgrade SpiceEdit and made them appear broken.
-func TestMenuLayout_CustomActionsAlwaysEnabled(t *testing.T) {
-	a := newTestApp(t, t.TempDir()) // no tabs opened
-
-	a.customActions = []customactions.Action{
-		{Label: "Plain", Command: "echo p"},
-		{Label: "Prompted", Command: "echo q",
-			Prompts: []customactions.Prompt{
-				{Key: "X", Type: customactions.PromptText},
-			}},
-	}
-	items, _, _ := a.menuLayout()
-
-	var plain, prompted *menuItemDef
-	for i := range items {
-		switch items[i].label {
-		case "Plain":
-			plain = &items[i]
-		case "Prompted":
-			prompted = &items[i]
-		}
-	}
-	if plain == nil || prompted == nil {
-		t.Fatalf("custom actions missing from layout: %v", items)
-	}
-	if !plain.enabled(a) {
-		t.Error("plain action should be enabled even with no tab open")
-	}
-	if !prompted.enabled(a) {
-		t.Error("prompted action should be enabled even with no tab open")
-	}
-}
-
-// TestRunCustomAction_NoFileStillRuns confirms a prompt-less action
-// runs even with no tab open. Earlier the runner short-circuited
-// here with a "no file open" flash, but that gate guessed wrong
-// for $FILE-free commands like "brew upgrade …" — they got blocked
-// even though they had no file dependency at all. The new contract:
-// always run; if a $FILE-dependent command then fails because FILE
-// is empty, the failure surfaces in the info modal with the actual
-// stderr, which is more informative than a generic flash.
-func TestRunCustomAction_NoFileStillRuns(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "ran.txt")
-	a := newTestApp(t, dir)
-	a.customActions = []customactions.Action{{
-		Label:   "Touch marker",
-		Command: "touch " + marker,
-	}}
-	a.runCustomAction(0)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		ev := a.screen.PollEvent()
-		if ev == nil {
-			break
-		}
-		if _, ok := ev.(*customActionDoneEvent); ok {
-			break
-		}
-	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("command did not run: %v", err)
-	}
-	if strings.Contains(a.statusMsg, "no file open") {
-		t.Errorf("status flash should not mention no file open: %q", a.statusMsg)
-	}
-}
-
-// TestRunCustomAction_OutOfRange is a no-op when idx is bogus. Caller
-// should never produce one but the guard keeps a stale layout from
-// crashing the editor.
-func TestRunCustomAction_OutOfRange(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.runCustomAction(0)  // empty list
-	a.runCustomAction(99) // out of range
-}
-
-// TestRunCustomAction_ExecutesAndPostsEvent runs a real `sh -c`
-// command against a small file and confirms that (a) the command
-// observed FILE / FILENAME via env, and (b) a customActionDoneEvent
-// lands on the screen's event queue. The chosen command writes a
-// marker file that lets the test verify env reached the subprocess.
-func TestRunCustomAction_ExecutesAndPostsEvent(t *testing.T) {
-	// Redirect the action log into the test's temp dir so we don't
-	// scribble into the developer's real ~/.local/state/spiceedit/.
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dir := t.TempDir()
-	target := filepath.Join(dir, "src.txt")
-	if err := os.WriteFile(target, []byte("payload"), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	marker := filepath.Join(dir, "marker.txt")
-	a := newTestApp(t, dir)
-	a.openFile(target)
-	a.customActions = []customactions.Action{{
-		Label:   "Mark",
-		Command: `printf "%s|%s" "$FILE" "$FILENAME" > ` + marker,
-	}}
-
-	a.runCustomAction(0)
-
-	// The action runs in a goroutine and posts an event back. Pull
-	// events off the screen's queue until we see the done event, with
-	// a sanity timeout so a regression can't hang the suite forever.
-	deadline := time.Now().Add(2 * time.Second)
-	var done *customActionDoneEvent
-	for time.Now().Before(deadline) && done == nil {
-		ev := a.screen.PollEvent()
-		if ev == nil {
-			break
-		}
-		if d, ok := ev.(*customActionDoneEvent); ok {
-			done = d
-		}
-	}
-	if done == nil {
-		t.Fatal("no customActionDoneEvent received within timeout")
-	}
-	if done.err != nil {
-		t.Fatalf("action errored: %v", done.err)
-	}
-	if done.label != "Mark" {
-		t.Errorf("event label = %q", done.label)
-	}
-
-	// Verify the subprocess saw the env variables we exported.
-	got, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatalf("marker read: %v", err)
-	}
-	want := target + "|" + "src.txt"
-	if string(got) != want {
-		t.Fatalf("marker content = %q, want %q", got, want)
-	}
-}
-
-// TestRunCustomAction_PromptedSkipsNoFileGuard ensures actions that
-// declare prompts can run even when no tab is open. Copy-from-remote
-// is the motivating case — without this, the very first thing the
-// user wants to do in a fresh session would silently flash "no file
-// open" and refuse to show the form.
-func TestRunCustomAction_PromptedSkipsNoFileGuard(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.customActions = []customactions.Action{{
-		Label:   "Copy from remote",
-		Command: "true",
-		Prompts: []customactions.Prompt{
-			{Key: "HOST", Type: customactions.PromptSelect, Options: []string{"a", "b"}},
-		},
-	}}
-	a.runCustomAction(0)
-
-	if !a.formOpen {
-		t.Fatal("prompted action with no file open should still show the form modal")
-	}
-	if strings.Contains(a.statusMsg, "no file open") {
-		t.Errorf("prompted action should not flash no-file-open: %q", a.statusMsg)
-	}
-}
-
-// TestRunCustomAction_PromptedExportsValuesAndExpands walks the full
-// SCP-from-remote path: the form opens, we fill it in, submit, and
-// assert the spawned shell saw both the form-collected env vars
-// (HOST, REMOTE_SRC) and the editor-state vars (PROJECT_ROOT). This
-// is the contract that makes the feature actually useful — if any of
-// these don't reach the shell, the user's command fails silently.
-func TestRunCustomAction_PromptedExportsValuesAndExpands(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "marker.txt")
-	a := newTestApp(t, dir)
-	a.customActions = []customactions.Action{{
-		Label:   "Copy from remote",
-		Command: `printf "%s|%s|%s" "$HOST" "$REMOTE_SRC" "$PROJECT_ROOT" > ` + marker,
-		Prompts: []customactions.Prompt{
-			{Key: "HOST", Type: customactions.PromptSelect, Options: []string{"cascade", "rager"}},
-			{Key: "REMOTE_SRC", Type: customactions.PromptText},
-		},
-	}}
-
-	a.runCustomAction(0)
-	if !a.formOpen {
-		t.Fatal("form did not open")
-	}
-
-	// Fill in REMOTE_SRC by typing into the focused field after Tab'ing
-	// past the HOST select.
-	a.handleFormKey(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
-	for _, r := range "/etc/hosts" {
-		a.handleFormKey(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
-	}
-	a.handleFormKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
-	if a.formOpen {
-		t.Fatal("Enter on last field should submit")
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		ev := a.screen.PollEvent()
-		if ev == nil {
-			break
-		}
-		if _, ok := ev.(*customActionDoneEvent); ok {
-			break
-		}
-	}
-
-	got, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatalf("marker read: %v", err)
-	}
-	parts := strings.Split(string(got), "|")
-	if len(parts) != 3 {
-		t.Fatalf("marker = %q, want HOST|REMOTE_SRC|PROJECT_ROOT", got)
-	}
-	if parts[0] != "cascade" {
-		t.Errorf("HOST = %q, want %q", parts[0], "cascade")
-	}
-	if parts[1] != "/etc/hosts" {
-		t.Errorf("REMOTE_SRC = %q, want %q", parts[1], "/etc/hosts")
-	}
-	if !strings.HasSuffix(parts[2], filepath.Base(dir)) {
-		t.Errorf("PROJECT_ROOT = %q, want suffix matching tempdir", parts[2])
-	}
-}
-
-// TestHandleCustomActionDone_FailureOpensInfoModal pins the error
-// reporting upgrade. The pre-fix behaviour was a one-line status
-// flash that truncated scp's stderr exactly when the user most
-// needed to read it. Now failures route into the info modal so the
-// stderr lines stay visible until dismissed.
-func TestHandleCustomActionDone_FailureOpensInfoModal(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.handleCustomActionDone(&customActionDoneEvent{
-		label:  "Copy from remote",
-		err:    fmt.Errorf("exit status 1"),
-		output: []byte("scp: /etc/missing: No such file or directory\n"),
-	})
-	if !a.confirmOpen || !a.confirmInfo {
-		t.Fatal("info modal should be open")
-	}
-	joined := strings.Join(a.confirmMessageLines, "\n")
-	if !strings.Contains(joined, "scp:") || !strings.Contains(joined, "missing") {
-		t.Errorf("info body missing stderr preview: %q", joined)
-	}
-	if !strings.Contains(a.confirmTitle, "Copy from remote") {
-		t.Errorf("title = %q, want it to mention the action label", a.confirmTitle)
-	}
-}
-
-// TestHandleCustomActionDone_SuccessRefreshesTree confirms a
-// successful action triggers an immediate tree refresh so a
-// freshly-pulled file appears without waiting on the 10-second
-// auto-refresh tick. Pinning this avoids a regression where a user
-// runs Copy-from-remote, sees "done", and then has to pause before
-// the new file becomes clickable in the sidebar.
-func TestHandleCustomActionDone_SuccessRefreshesTree(t *testing.T) {
-	dir := t.TempDir()
-	a := newTestApp(t, dir)
-	// Drop a file directly on disk that the tree hasn't seen yet —
-	// without an explicit refresh it would only show up on the next
-	// 10-second tick.
-	newFile := filepath.Join(dir, "fresh.txt")
-	if err := os.WriteFile(newFile, []byte("payload"), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	beforeChildren := len(a.tree.Root.Children)
-	a.handleCustomActionDone(&customActionDoneEvent{label: "X"})
-	if got := len(a.tree.Root.Children); got <= beforeChildren {
-		t.Errorf("tree was not refreshed: %d → %d children", beforeChildren, got)
-	}
-}
-
-// TestSplitErrorOutput_TruncatesAndAppendsLogPath nails the body
-// the info modal renders on failure. Without truncation a runaway
-// scp -v dump would push the dialog off-screen; without the actions.log
-// pointer the user can't easily get the full version even though
-// we're already writing it.
-func TestSplitErrorOutput_TruncatesAndAppendsLogPath(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", "/tmp/xdgtest")
-
-	long := strings.Repeat("really long line that exceeds eighty cells ", 4)
-	out := []byte(long + "\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\n")
-	body := splitErrorOutput(fmt.Errorf("exit 1"), out)
-
-	if body[0] != "exit 1" {
-		t.Errorf("body[0] = %q, want exit-error summary", body[0])
-	}
-	last := body[len(body)-1]
-	if !strings.Contains(last, "actions.log") {
-		t.Errorf("last line = %q, want actions.log pointer", last)
-	}
-	for _, ln := range body {
-		if runeLen(ln) > 80 {
-			t.Errorf("line over 80 cells: %q (len=%d)", ln, runeLen(ln))
-		}
-	}
-	if !strings.Contains(strings.Join(body, "\n"), "truncated") {
-		t.Error("expected '… truncated' marker for >maxLines output")
-	}
 }
 
 // TestLayoutTabs_IconsExpandWidth pins down the geometry contract:

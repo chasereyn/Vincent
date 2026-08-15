@@ -1,12 +1,12 @@
 // =============================================================================
-// File: internal/spiceconfig/spiceconfig.go
+// File: internal/config/config.go
 // Author: Spicer Matthews <spicer@cloudmanic.com>
 // Created: 2026-04-30
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-// Package spiceconfig loads the editor's small user-level config from
-// ~/.config/spiceedit/config.json. It's separate from customactions on
+// Package config loads Vincent's small user-level config from
+// ~/.config/vincent/config.json. It's separate from customactions on
 // purpose: actions.json is a list of shell-out menu entries, config.json
 // is editor preferences. Keeping them apart means a malformed actions
 // file can't break editor settings and vice-versa.
@@ -22,7 +22,7 @@
 // The loader is best-effort the same way customactions is: missing
 // file → defaults, malformed file → error returned for the app to
 // flash, but the editor still starts cleanly.
-package spiceconfig
+package config
 
 import (
 	"encoding/json"
@@ -66,18 +66,18 @@ type fileFormat struct {
 }
 
 // DefaultPath returns the canonical config-file location:
-// $XDG_CONFIG_HOME/spiceedit/config.json, falling back to
-// ~/.config/spiceedit/config.json. Returns "" when neither resolves
+// $XDG_CONFIG_HOME/vincent/config.json, falling back to
+// ~/.config/vincent/config.json. Returns "" when neither resolves
 // — callers should treat that as "use defaults".
 func DefaultPath() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "spiceedit", "config.json")
+		return filepath.Join(xdg, "vincent", "config.json")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".config", "spiceedit", "config.json")
+	return filepath.Join(home, ".config", "vincent", "config.json")
 }
 
 // Load reads and parses the config file at path, returning a Config

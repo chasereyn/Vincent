@@ -418,84 +418,60 @@ func TestHandleConfirmKey_AllBranches(t *testing.T) {
 	}
 }
 
-// TestOpenTreeContext_Folder offers New File + Rename + Delete plus the
-// two clipboard rows.
-func TestOpenTreeContext_Folder(t *testing.T) {
+// TestOpenTreeContext_OffersNoMutations is the read-only invariant for the
+// file-tree right-click menu. Vincent reviews code, it does not edit it, so
+// the menu must never regain New File / Rename / Delete — the three entries
+// this replaced when fileops.go was dropped. Folder, file, and project root
+// all collapse to the same two clipboard rows, which is exactly the point:
+// there is no node type for which the tree offers a mutation.
+//
+// When phase 3 adds review actions here (View diff, Comment on file), extend
+// wantLabels — but nothing added should write to the working tree.
+func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "child")
 	if err := mkdir(sub); err != nil {
 		t.Fatal(err)
 	}
-	a := newTestApp(t, dir)
-	// Find the child node in the tree.
-	var node *filetree.Node
-	for _, c := range a.tree.Root.Children {
-		if c.Name == "child" {
-			node = c
-			break
-		}
-	}
-	if node == nil {
-		t.Fatal("child node not in tree")
-	}
-	a.openTreeContext(node, 5, 5)
-	if !a.contextOpen {
-		t.Fatal("context should open")
-	}
-	wantLabels := []string{"New File", "Rename", "Delete", "Copy rel path", "Copy abs path"}
-	if len(a.contextItems) != len(wantLabels) {
-		t.Fatalf("folder context should have %d items, got %d", len(wantLabels), len(a.contextItems))
-	}
-	for i, w := range wantLabels {
-		if a.contextItems[i].label != w {
-			t.Fatalf("item %d label: got %q, want %q", i, a.contextItems[i].label, w)
-		}
-	}
-}
-
-// TestOpenTreeContext_File offers Rename + Delete plus the two clipboard
-// rows. New File is folder-only.
-func TestOpenTreeContext_File(t *testing.T) {
-	dir := t.TempDir()
 	target := filepath.Join(dir, "f.txt")
 	if err := writeFile(target, "x"); err != nil {
 		t.Fatal(err)
 	}
 	a := newTestApp(t, dir)
-	var node *filetree.Node
-	for _, c := range a.tree.Root.Children {
-		if c.Name == "f.txt" {
-			node = c
-			break
-		}
-	}
-	if node == nil {
-		t.Fatal("file node not in tree")
-	}
-	a.openTreeContext(node, 5, 5)
-	wantLabels := []string{"Rename", "Delete", "Copy rel path", "Copy abs path"}
-	if len(a.contextItems) != len(wantLabels) {
-		t.Fatalf("file context should have %d items, got %d", len(wantLabels), len(a.contextItems))
-	}
-	for i, w := range wantLabels {
-		if a.contextItems[i].label != w {
-			t.Fatalf("item %d label: got %q, want %q", i, a.contextItems[i].label, w)
-		}
-	}
-}
 
-// TestOpenTreeContext_Root offers New File and the two clipboard rows —
-// Rename / Delete on the project root would be a footgun.
-func TestOpenTreeContext_Root(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openTreeContext(a.tree.Root, 5, 5)
-	wantLabels := []string{"New File", "Copy rel path", "Copy abs path"}
-	if len(a.contextItems) != len(wantLabels) {
-		t.Fatalf("root context should have %d items, got %d", len(wantLabels), len(a.contextItems))
+	find := func(name string) *filetree.Node {
+		t.Helper()
+		for _, c := range a.tree.Root.Children {
+			if c.Name == name {
+				return c
+			}
+		}
+		t.Fatalf("%s not in tree", name)
+		return nil
 	}
-	for i, w := range wantLabels {
-		if a.contextItems[i].label != w {
-			t.Fatalf("item %d label: got %q, want %q", i, a.contextItems[i].label, w)
+
+	wantLabels := []string{"Copy rel path", "Copy abs path"}
+	cases := []struct {
+		name string
+		node *filetree.Node
+	}{
+		{"folder", find("child")},
+		{"file", find("f.txt")},
+		{"root", a.tree.Root},
+	}
+
+	for _, tc := range cases {
+		a.openTreeContext(tc.node, 5, 5)
+		if !a.contextOpen {
+			t.Fatalf("%s: context should open", tc.name)
+		}
+		if len(a.contextItems) != len(wantLabels) {
+			t.Fatalf("%s context: got %d items, want %d", tc.name, len(a.contextItems), len(wantLabels))
+		}
+		for i, w := range wantLabels {
+			if a.contextItems[i].label != w {
+				t.Fatalf("%s item %d label: got %q, want %q", tc.name, i, a.contextItems[i].label, w)
+			}
 		}
 	}
 }

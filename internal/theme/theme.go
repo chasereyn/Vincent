@@ -19,9 +19,10 @@ import "github.com/gdamore/tcell/v2"
 // element of the palette can be balanced against the others.
 type Theme struct {
 	// --- Surfaces ---
-	BG        tcell.Color // Editor background.
-	SidebarBG tcell.Color // File tree / inactive tab background, slightly darker than BG.
-	StatusBG  tcell.Color // Status bar background.
+	BG        tcell.Color // Editor background. Pure black.
+	SidebarBG tcell.Color // File tree / inactive tab background. Also pure black — see Default.
+	StatusBG  tcell.Color // Status bar background. Also pure black.
+	StatusFG  tcell.Color // Status bar text, drawn on StatusBG.
 	LineHL    tcell.Color // Active line highlight.
 
 	// --- Foregrounds & accents ---
@@ -65,21 +66,45 @@ type Theme struct {
 	SynConstant tcell.Color
 }
 
-// Default returns the editor's curated dark theme. It is the only theme the
-// editor ships with — calling code can tweak fields on the returned value if
-// it really needs to, but there is no theme-loading machinery on purpose.
+// Default returns Vincent's palette. It is the only theme shipped —
+// calling code can tweak fields on the returned value if it really needs
+// to, but there is no theme-loading machinery on purpose.
+//
+// Every surface is pure black, deliberately. spice-edit shipped a Tokyo
+// Night charcoal (0x1a1b26) with a slightly darker sidebar, which is the
+// conventional choice; Vincent instead paints black and lets the splitter
+// and borders carry the panel separation. Two consequences worth knowing
+// before you "fix" this:
+//
+//   - BG and SidebarBG are intentionally identical. The invariant that
+//     replaced "these must differ" is "Subtle must contrast with BG" —
+//     the splitter is now the only thing dividing the panes, so if it
+//     stops being visible the layout genuinely breaks.
+//   - Black is set explicitly rather than via tcell.ColorDefault, which
+//     would inherit whatever the host terminal is using and would not
+//     reliably be black.
 func Default() Theme {
 	return Theme{
-		// Surfaces.
-		BG:        tcell.NewRGBColor(0x1a, 0x1b, 0x26),
-		SidebarBG: tcell.NewRGBColor(0x16, 0x16, 0x1e),
-		StatusBG:  tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
-		LineHL:    tcell.NewRGBColor(0x1f, 0x20, 0x2e),
+		// Surfaces — all pure black. See the note above.
+		BG:        tcell.NewRGBColor(0x00, 0x00, 0x00),
+		SidebarBG: tcell.NewRGBColor(0x00, 0x00, 0x00),
+		StatusBG:  tcell.NewRGBColor(0x00, 0x00, 0x00),
+		// Raised just enough to read as a highlight against black without
+		// becoming a grey slab.
+		LineHL: tcell.NewRGBColor(0x12, 0x12, 0x16),
 
 		// Foregrounds & accents.
-		Text:        tcell.NewRGBColor(0xc0, 0xca, 0xf5),
-		Muted:       tcell.NewRGBColor(0x56, 0x5f, 0x89),
-		Subtle:      tcell.NewRGBColor(0x32, 0x34, 0x4a),
+		Text:  tcell.NewRGBColor(0xc0, 0xca, 0xf5),
+		Muted: tcell.NewRGBColor(0x56, 0x5f, 0x89),
+		// Lifted from spice-edit's 0x32344a: borders and the splitter now
+		// sit on black rather than on charcoal, and at the old value they
+		// were close to invisible.
+		Subtle: tcell.NewRGBColor(0x3a, 0x3d, 0x55),
+		// StatusFG replaces the old inverted status bar. spice-edit drew
+		// theme.BG on a solid blue StatusBG; with a black StatusBG that
+		// would be black-on-black, so the bar now draws accent text on
+		// black instead of a coloured slab.
+		StatusFG:    tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
 		Accent:      tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
 		AccentSoft:  tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
 		Selection:   tcell.NewRGBColor(0x33, 0x46, 0x7c),

@@ -1,39 +1,33 @@
 # =============================================================================
 # File: Makefile
-# Author: Spicer Matthews <spicer@cloudmanic.com>
-# Created: 2026-04-29
-# Copyright: 2026 Cloudmanic, LLC. All rights reserved.
+# Copyright: 2026 Chase Reynolds. All rights reserved.
+#
+# Derived from spice-edit's Makefile (Copyright 2026 Cloudmanic, LLC, MIT).
+# The website targets are gone — Vincent has no site to build.
 # =============================================================================
 
-BINARY := spiceedit
-SITE_DIR := website
+BINARY := vincent
 
-.PHONY: run build install build-linux test test-short coverage tidy clean help \
-        site-install site-dev site-build site-clean
+.PHONY: run build install build-linux build-mac test test-race test-short coverage tidy clean help
 
 # help is the default target so `make` with no args prints what's available.
 help:
-	@echo "SpiceEdit — opinionated mouse-first terminal code editor"
+	@echo "Vincent — read-only, mouse-first terminal client for reviewing agent code"
 	@echo ""
-	@echo "Editor targets:"
-	@echo "  make run          Run the editor in the current directory."
+	@echo "  make run          Run against the current directory."
 	@echo "  make build        Build the binary into ./bin/$(BINARY)."
-	@echo "  make install      Install ./bin/$(BINARY) into /usr/local/bin."
+	@echo "  make install      go install into \$$GOPATH/bin."
 	@echo "  make build-linux  Cross-compile a static linux/amd64 binary."
-	@echo "  make test         Run the full test suite with -race."
-	@echo "  make test-short   Skip slow tests (-short) — quick iteration loop."
-	@echo "  make coverage     Generate coverage.out + an HTML report at coverage.html."
+	@echo "  make build-mac    Cross-compile a static darwin/arm64 binary."
+	@echo "  make test         Run the full suite."
+	@echo "  make test-race    Run with -race (needs cgo; CI parity)."
+	@echo "  make test-short   Skip slow tests — quick iteration loop."
+	@echo "  make coverage     Generate coverage.out + coverage.html."
 	@echo "  make tidy         Run 'go mod tidy'."
 	@echo "  make clean        Remove ./bin and coverage artifacts."
-	@echo ""
-	@echo "Website targets (spice-edit.com — Hugo + Tailwind in ./$(SITE_DIR)):"
-	@echo "  make site-install One-time: install npm deps in $(SITE_DIR)."
-	@echo "  make site-dev     Run the site locally with live reload at http://localhost:1313."
-	@echo "  make site-build   Build a production-ready site into $(SITE_DIR)/public."
-	@echo "  make site-clean   Remove $(SITE_DIR)/public and Tailwind output."
 
-# run starts the editor via 'go run'. Quickest path for development.
-# For SSH/production use, prefer 'make build' and ship the binary.
+# run starts Vincent via 'go run' against the current directory. Quickest
+# path for development; for real use prefer 'make build' and the binary.
 run:
 	go run .
 
@@ -42,30 +36,43 @@ build:
 	mkdir -p bin
 	go build -o bin/$(BINARY) .
 
-# install copies the binary into /usr/local/bin so you can launch it as `spiceedit`.
-install: build
-	install -m 0755 bin/$(BINARY) /usr/local/bin/$(BINARY)
+# install puts the binary on PATH via the Go toolchain rather than
+# /usr/local/bin, which needs sudo on macOS and does not exist on Windows.
+install:
+	go install .
 
-# build-linux cross-compiles a fully static linux/amd64 binary. Drop the
-# resulting bin/$(BINARY)-linux-amd64 onto a remote box and run it inside
-# tmux/zellij — no runtime, no libc, just one file.
+# build-linux cross-compiles a fully static linux/amd64 binary.
 build-linux:
 	mkdir -p bin
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags='-s -w' -o bin/$(BINARY)-linux-amd64 .
 
-# test runs the full suite with the race detector. The same command
-# CI runs (.github/workflows/test.yml) — keep them in lockstep so a
-# green CI is the same signal as a green local run.
+# build-mac cross-compiles for Apple Silicon. Present because this repo is
+# developed on Windows today and moves to macOS later — verifying the
+# cross-compile keeps working is the point of having the target.
+build-mac:
+	mkdir -p bin
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags='-s -w' -o bin/$(BINARY)-darwin-arm64 .
+
+# test runs the full suite. Deliberately WITHOUT -race: the race detector
+# requires cgo, and this machine builds with CGO_ENABLED=0 (no C compiler,
+# which is also what keeps the binary static). Running `make test` here
+# would otherwise fail with "-race requires cgo" rather than telling you
+# anything about the code.
 test:
+	go test ./...
+
+# test-race is the CI-parity target. CI runners have a C compiler, so
+# .github/workflows/test.yml runs this on all three platforms. Locally on
+# Windows it needs `scoop install mingw` first.
+test-race:
 	go test -race ./...
 
-# test-short is the quick local iteration loop: skip anything tagged
-# slow with -short, no race detector. Use this while writing tests.
+# test-short is the quick local loop: skip anything tagged slow, no race
+# detector. Use this while writing tests.
 test-short:
 	go test -short ./...
 
-# coverage produces a coverage profile across every package and a
-# rendered HTML report you can open in a browser.
+# coverage produces a profile across every package plus an HTML report.
 coverage:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
@@ -79,30 +86,3 @@ tidy:
 # clean removes build artifacts and coverage output.
 clean:
 	rm -rf bin coverage.out coverage.html
-
-# -----------------------------------------------------------------------------
-# Website targets — spice-edit.com lives in ./website (Hugo + Tailwind v4).
-# Requires Hugo extended (>= 0.135) and Node (>= 18) on PATH.
-# -----------------------------------------------------------------------------
-
-# site-install pulls the npm deps the site needs (Tailwind CLI + npm-run-all).
-# Idempotent — safe to re-run any time.
-site-install:
-	cd $(SITE_DIR) && npm install
-
-# site-dev runs Tailwind in watch mode and Hugo's dev server in parallel,
-# so edits to layouts, content, or CSS rebuild and live-reload at
-# http://localhost:1313. Stops both on Ctrl+C.
-site-dev:
-	cd $(SITE_DIR) && npm run dev
-
-# site-build produces the production-ready static site at $(SITE_DIR)/public.
-# This is what the GitHub Pages workflow ships. The Tailwind build runs first
-# so the minified CSS is on disk before Hugo reads its static directory.
-site-build:
-	cd $(SITE_DIR) && npm run build
-
-# site-clean removes the generated build outputs. The npm cache and
-# node_modules stay put — that's site-install's job to manage.
-site-clean:
-	rm -rf $(SITE_DIR)/public $(SITE_DIR)/static/css/site.css $(SITE_DIR)/resources

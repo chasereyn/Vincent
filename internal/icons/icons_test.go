@@ -14,7 +14,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/chasereyn/vincent/internal/spiceconfig"
+	"github.com/chasereyn/vincent/internal/config"
 )
 
 // TestForFolders pins the folder open/closed glyph pairing — flipping
@@ -89,10 +89,10 @@ func TestForFallback(t *testing.T) {
 // detection entirely — important for users on a terminal where
 // detection would lie either way.
 func TestResolveExplicitOverrides(t *testing.T) {
-	if !Resolve(spiceconfig.IconsOn) {
+	if !Resolve(config.IconsOn) {
 		t.Fatalf("IconsOn should always resolve true")
 	}
-	if Resolve(spiceconfig.IconsOff) {
+	if Resolve(config.IconsOff) {
 		t.Fatalf("IconsOff should always resolve false")
 	}
 }
@@ -102,7 +102,7 @@ func TestResolveExplicitOverrides(t *testing.T) {
 // real bool. We can't assert true or false here because CI may or may
 // not have Nerd Fonts installed.
 func TestResolveAutoIsBoolean(t *testing.T) {
-	got := Resolve(spiceconfig.IconsAuto)
+	got := Resolve(config.IconsAuto)
 	_ = got // any bool is fine; the assertion is "doesn't panic"
 }
 

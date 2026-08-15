@@ -1,15 +1,16 @@
 // =============================================================================
-// File: internal/spiceconfig/spiceconfig_test.go
+// File: internal/config/config_test.go
 // Author: Spicer Matthews <spicer@cloudmanic.com>
 // Created: 2026-04-30
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-package spiceconfig
+package config
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -154,7 +155,7 @@ func TestLoadForwardCompat(t *testing.T) {
 func TestDefaultPathHonoursXDG(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
 	got := DefaultPath()
-	want := filepath.Join("/tmp/xdg-test", "spiceedit", "config.json")
+	want := filepath.Join("/tmp/xdg-test", "vincent", "config.json")
 	if got != want {
 		t.Fatalf("DefaultPath() = %q, want %q", got, want)
 	}
@@ -165,9 +166,17 @@ func TestDefaultPathHonoursXDG(t *testing.T) {
 // XDG configured.
 func TestDefaultPathFallsBackToHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", "/tmp/home-test")
+	// os.UserHomeDir reads USERPROFILE on Windows and HOME everywhere
+	// else. Setting only HOME made this test pass on macOS/Linux and
+	// fail on Windows against the real profile directory.
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
 	got := DefaultPath()
-	want := filepath.Join("/tmp/home-test", ".config", "spiceedit", "config.json")
+	want := filepath.Join(home, ".config", "vincent", "config.json")
 	if got != want {
 		t.Fatalf("DefaultPath() = %q, want %q", got, want)
 	}

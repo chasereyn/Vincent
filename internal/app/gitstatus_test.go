@@ -228,7 +228,11 @@ func TestLoadGitStatus_FromSubdirectory(t *testing.T) {
 // produces — we want regression coverage on the format itself, not just
 // the happy path through real git.
 func TestParsePorcelain_BasicCases(t *testing.T) {
-	top := "/tmp/repo"
+	// wantKeys are repo-relative and joined against top in the assertion
+	// below. parsePorcelain builds keys with filepath.Join, so spelling
+	// them as "/tmp/repo/x" literals passes on Unix and fails on Windows
+	// even though the parser is correct.
+	top := filepath.Join(string(filepath.Separator)+"tmp", "repo")
 	cases := []struct {
 		name     string
 		input    string
@@ -237,32 +241,32 @@ func TestParsePorcelain_BasicCases(t *testing.T) {
 		{
 			name:     "single modified",
 			input:    " M file.txt\n",
-			wantKeys: []string{"/tmp/repo/file.txt"},
+			wantKeys: []string{"file.txt"},
 		},
 		{
 			name:     "untracked",
 			input:    "?? new.go\n",
-			wantKeys: []string{"/tmp/repo/new.go"},
+			wantKeys: []string{"new.go"},
 		},
 		{
 			name:     "staged plus modified",
 			input:    "MM file.go\n",
-			wantKeys: []string{"/tmp/repo/file.go"},
+			wantKeys: []string{"file.go"},
 		},
 		{
 			name:     "multiple lines",
 			input:    " M a.txt\n?? b.txt\nA  c.txt\n",
-			wantKeys: []string{"/tmp/repo/a.txt", "/tmp/repo/b.txt", "/tmp/repo/c.txt"},
+			wantKeys: []string{"a.txt", "b.txt", "c.txt"},
 		},
 		{
 			name:     "rename marks both old and new",
 			input:    "R  oldname.txt -> newname.txt\n",
-			wantKeys: []string{"/tmp/repo/oldname.txt", "/tmp/repo/newname.txt"},
+			wantKeys: []string{"oldname.txt", "newname.txt"},
 		},
 		{
 			name:     "quoted path with spaces",
 			input:    " M \"weird name.txt\"\n",
-			wantKeys: []string{"/tmp/repo/weird name.txt"},
+			wantKeys: []string{"weird name.txt"},
 		},
 		{
 			name:     "blank input",
@@ -284,8 +288,9 @@ func TestParsePorcelain_BasicCases(t *testing.T) {
 					len(got), sortedKeys(got))
 			}
 			for _, k := range tc.wantKeys {
-				if got[k] == filetree.GitChangeNone {
-					t.Errorf("missing %q in %v", k, sortedKeys(got))
+				key := filepath.Join(top, k)
+				if got[key] == filetree.GitChangeNone {
+					t.Errorf("missing %q in %v", key, sortedKeys(got))
 				}
 			}
 		})
@@ -295,16 +300,19 @@ func TestParsePorcelain_BasicCases(t *testing.T) {
 // TestParsePorcelain_StatusKinds confirms the tree can color different git
 // states distinctly instead of collapsing everything to one dirty color.
 func TestParsePorcelain_StatusKinds(t *testing.T) {
-	top := "/tmp/repo"
+	top := filepath.Join(string(filepath.Separator)+"tmp", "repo")
 	got := parsePorcelain([]byte(" M mod.go\n?? new.go\n D gone.go\nR  old.go -> moved.go\n"), top)
+	// Keys are repo-relative and joined below — see the note in
+	// TestParsePorcelain_BasicCases.
 	want := map[string]filetree.GitChangeKind{
-		"/tmp/repo/mod.go":   filetree.GitChangeModified,
-		"/tmp/repo/new.go":   filetree.GitChangeAdded,
-		"/tmp/repo/gone.go":  filetree.GitChangeDeleted,
-		"/tmp/repo/old.go":   filetree.GitChangeDeleted,
-		"/tmp/repo/moved.go": filetree.GitChangeRenamed,
+		"mod.go":   filetree.GitChangeModified,
+		"new.go":   filetree.GitChangeAdded,
+		"gone.go":  filetree.GitChangeDeleted,
+		"old.go":   filetree.GitChangeDeleted,
+		"moved.go": filetree.GitChangeRenamed,
 	}
-	for path, kind := range want {
+	for rel, kind := range want {
+		path := filepath.Join(top, rel)
 		if got[path] != kind {
 			t.Fatalf("%s kind = %v, want %v; got %v", path, got[path], kind, got)
 		}
@@ -379,19 +387,22 @@ func TestUnquotePath_Variants(t *testing.T) {
 // every ancestor folder up to (and including) the project root, so a
 // collapsed branch still shows the user there's a change inside.
 func TestDirtyFolderSet_RollsUpToRoot(t *testing.T) {
-	root := "/proj"
+	// Paths are joined rather than written as POSIX literals so the walk
+	// is exercised with the platform's own separator.
+	root := filepath.Join(string(filepath.Separator) + "proj")
+	leaf := filepath.Join(root, "a", "b", "c", "leaf.txt")
 	dirty := map[string]filetree.GitChangeKind{
-		"/proj/a/b/c/leaf.txt": filetree.GitChangeModified,
-		"/proj/x/y.txt":        filetree.GitChangeModified,
+		leaf:                              filetree.GitChangeModified,
+		filepath.Join(root, "x", "y.txt"): filetree.GitChangeModified,
 	}
 	got := dirtyFolderSet(dirty, root)
 
 	want := []string{
-		"/proj",
-		"/proj/a",
-		"/proj/a/b",
-		"/proj/a/b/c",
-		"/proj/x",
+		root,
+		filepath.Join(root, "a"),
+		filepath.Join(root, "a", "b"),
+		filepath.Join(root, "a", "b", "c"),
+		filepath.Join(root, "x"),
 	}
 	for _, w := range want {
 		if got[w] == filetree.GitChangeNone {
@@ -399,7 +410,7 @@ func TestDirtyFolderSet_RollsUpToRoot(t *testing.T) {
 		}
 	}
 	// The leaf file path itself isn't a folder, must not appear here.
-	if got["/proj/a/b/c/leaf.txt"] != filetree.GitChangeNone {
+	if got[leaf] != filetree.GitChangeNone {
 		t.Error("dirtyFolderSet should not contain file paths")
 	}
 }
@@ -408,20 +419,22 @@ func TestDirtyFolderSet_RollsUpToRoot(t *testing.T) {
 // than continuing all the way to "/", so a sibling project directory
 // or the user's home directory can't be marked dirty by us.
 func TestDirtyFolderSet_StopsAtRoot(t *testing.T) {
-	root := "/proj/inner"
+	sep := string(filepath.Separator)
+	parent := filepath.Join(sep + "proj")
+	root := filepath.Join(parent, "inner")
 	dirty := map[string]filetree.GitChangeKind{
-		"/proj/inner/a/b.txt": filetree.GitChangeModified,
+		filepath.Join(root, "a", "b.txt"): filetree.GitChangeModified,
 	}
 	got := dirtyFolderSet(dirty, root)
-	for _, ancestor := range []string{"/proj", "/", "/home"} {
+	for _, ancestor := range []string{parent, sep, filepath.Join(sep + "home")} {
 		if got[ancestor] != filetree.GitChangeNone {
 			t.Errorf("walk escaped root: %q should not be marked", ancestor)
 		}
 	}
-	if got["/proj/inner"] == filetree.GitChangeNone {
+	if got[root] == filetree.GitChangeNone {
 		t.Error("root itself should be marked when something inside is dirty")
 	}
-	if got["/proj/inner/a"] == filetree.GitChangeNone {
+	if got[filepath.Join(root, "a")] == filetree.GitChangeNone {
 		t.Error("intermediate folder should be marked")
 	}
 }
@@ -441,11 +454,18 @@ func TestDirtyFolderSet_EmptyInput(t *testing.T) {
 // TestRebaseGitPaths_NormalizesTreeRootCasing keeps git and filetree path keys
 // aligned on case-insensitive filesystems where cwd casing may drift.
 func TestRebaseGitPaths_NormalizesTreeRootCasing(t *testing.T) {
+	// Paths are built with filepath.Join rather than POSIX literals:
+	// rebaseGitPaths rejoins with the platform separator, so hardcoded
+	// "/a/b" literals fail on Windows even though the behaviour under
+	// test is correct.
+	sep := string(filepath.Separator)
+	upper := filepath.Join(sep+"Users", "fatih", "Documents", "Projeler", "vincent")
+	lower := filepath.Join(sep+"Users", "fatih", "documents", "projeler", "vincent")
 	dirty := map[string]filetree.GitChangeKind{
-		"/Users/fatih/Documents/Projeler/spice-edit/internal/app/app.go": filetree.GitChangeModified,
+		filepath.Join(upper, "internal", "app", "app.go"): filetree.GitChangeModified,
 	}
-	rebased := rebaseGitPaths(dirty, "/Users/fatih/documents/projeler/spice-edit")
-	want := "/Users/fatih/documents/projeler/spice-edit/internal/app/app.go"
+	rebased := rebaseGitPaths(dirty, lower)
+	want := filepath.Join(lower, "internal", "app", "app.go")
 	if rebased[want] != filetree.GitChangeModified {
 		t.Fatalf("rebased path missing: got %v want key %q", rebased, want)
 	}
@@ -454,15 +474,21 @@ func TestRebaseGitPaths_NormalizesTreeRootCasing(t *testing.T) {
 // TestRebaseGitPaths_DoesNotMoveRepoPathsUnderSubdirRoot protects launches
 // rooted at a subdirectory: only descendants of that tree root are rebased.
 func TestRebaseGitPaths_DoesNotMoveRepoPathsUnderSubdirRoot(t *testing.T) {
+	// See the note in TestRebaseGitPaths_NormalizesTreeRootCasing on why
+	// these are joined rather than written as POSIX literals.
+	sep := string(filepath.Separator)
+	repo := filepath.Join(sep+"repo", "internal")
+	inside := filepath.Join(repo, "app", "app.go")
+	outside := filepath.Join(repo, "editor", "tab.go")
 	dirty := map[string]filetree.GitChangeKind{
-		"/repo/internal/app/app.go":    filetree.GitChangeModified,
-		"/repo/internal/editor/tab.go": filetree.GitChangeModified,
+		inside:  filetree.GitChangeModified,
+		outside: filetree.GitChangeModified,
 	}
-	rebased := rebaseGitPaths(dirty, "/repo/internal/app")
-	if rebased["/repo/internal/app/app.go"] != filetree.GitChangeModified {
+	rebased := rebaseGitPaths(dirty, filepath.Join(repo, "app"))
+	if rebased[inside] != filetree.GitChangeModified {
 		t.Fatalf("descendant path should stay under subdir root, got %v", rebased)
 	}
-	if rebased["/repo/internal/editor/tab.go"] != filetree.GitChangeModified {
+	if rebased[outside] != filetree.GitChangeModified {
 		t.Fatalf("outside path should remain unchanged, got %v", rebased)
 	}
 }

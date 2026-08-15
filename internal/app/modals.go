@@ -861,19 +861,14 @@ func (a *App) drawDirtyClose() {
 // -----------------------------------------------------------------------------
 
 // openTreeContext opens a small right-click popup over the file tree, anchored
-// near (x, y). The items shown depend on whether n is a file or a folder.
-// Renaming or deleting the project root is intentionally not allowed.
+// near (x, y). Vincent is a reviewer, not an editor, so this menu offers no
+// mutations — the create / rename / delete entries went away with fileops.go.
+// Phase 3 is where this grows the review-side entries (stage, view diff,
+// comment on file) that replace them.
 func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	a.closeAllModals()
 
 	items := []contextItem{}
-	if n.IsDir {
-		items = append(items, contextItem{label: "New File", action: ctxNewFile})
-	}
-	if n != a.tree.Root {
-		items = append(items, contextItem{label: "Rename", action: ctxRename})
-		items = append(items, contextItem{label: "Delete", action: ctxDelete})
-	}
 	items = append(items, contextItem{label: "Copy rel path", action: ctxCopyRelativePath})
 	items = append(items, contextItem{label: "Copy abs path", action: ctxCopyAbsolutePath})
 

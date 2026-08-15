@@ -35,6 +35,7 @@ func TestDefault_AllColorsSet(t *testing.T) {
 		{"BG", th.BG},
 		{"SidebarBG", th.SidebarBG},
 		{"StatusBG", th.StatusBG},
+		{"StatusFG", th.StatusFG},
 		{"LineHL", th.LineHL},
 		{"Text", th.Text},
 		{"Muted", th.Muted},
@@ -80,8 +81,17 @@ func TestDefault_ContrastInvariants(t *testing.T) {
 	}{
 		// Text on background — without contrast there's nothing to read.
 		{"BG vs Text", th.BG, th.Text},
-		// Sidebar must read as a separate panel from the editor surface.
-		{"BG vs SidebarBG", th.BG, th.SidebarBG},
+		// BG vs SidebarBG is deliberately NOT asserted here. Vincent paints
+		// every surface pure black, so those two are equal on purpose; the
+		// invariant that replaced it is the next one down. See theme.Default.
+		//
+		// With both panes black, the splitter and modal borders (Subtle) are
+		// the only thing separating them. If Subtle ever collapses toward
+		// black the layout stops being readable, which is the real failure
+		// this file exists to catch.
+		{"Subtle vs BG", th.Subtle, th.BG},
+		// Status bar text must not vanish into the (now black) status bar.
+		{"StatusFG vs StatusBG", th.StatusFG, th.StatusBG},
 		// Selection block must stand out against the unselected background.
 		{"Selection vs BG", th.Selection, th.BG},
 	}

@@ -5,11 +5,17 @@
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-// Command spiceedit is SpiceEdit — an opinionated, mouse-first terminal code editor.
-// It is designed for the SSH-into-a-box workflow: a single static binary,
-// drop it on the remote host, run it inside tmux/zellij, and you get a
-// VS-Code-shaped UI (file tree, tabs, syntax highlighting, status bar) you
-// can drive almost entirely with the mouse.
+// Command vincent is a read-only, mouse-first terminal client for reviewing
+// code that AI agents wrote. It is a single static binary with a
+// VS-Code-shaped UI — file tree, tabs, syntax highlighting, status bar —
+// that you drive almost entirely with the mouse.
+//
+// Vincent does not edit files. It reads them, shows you what changed,
+// collects review notes anchored to diff lines, and hands those notes
+// back to the agent that wrote the code.
+//
+// Forked from spice-edit (MIT, Cloudmanic LLC), which is a terminal
+// *editor*; see CLAUDE.md for what was stripped and why.
 package main
 
 import (
@@ -48,7 +54,7 @@ type cliResult struct {
 //   - a flag (--version / -v / --help / -h) → print-and-exit action
 //   - a directory path → use as the editor's root
 //   - a file path → root at the file's parent dir, open the file in a tab
-//   - a missing path → assume "spiceedit foo.go" means "create foo.go" —
+//   - a missing path → assume "vincent foo.go" means "create foo.go" —
 //     same intuition as `vim foo.go` on a non-existent file.
 //
 // Pure function; no IO beyond os.Stat. Returns a result the caller acts
@@ -97,18 +103,18 @@ func resolveArgs(args []string) cliResult {
 // the editor is itself the help — once running, the ≡ menu lists every
 // action.
 func printHelp() {
-	fmt.Println(`SpiceEdit — opinionated mouse-first terminal code editor.
+	fmt.Println(`Vincent — read-only, mouse-first terminal client for reviewing agent code.
 
 Usage:
-  spiceedit                     Open the current directory.
-  spiceedit <directory>         Open a project directory.
-  spiceedit <file>              Open a file (its parent becomes the project root).
-  spiceedit --version           Print the version and exit.
-  spiceedit --help              Print this help and exit.
+  vincent                     Open the current directory.
+  vincent <directory>         Open a project (or a folder of projects).
+  vincent <file>              Open a file (its parent becomes the root).
+  vincent --version           Print the version and exit.
+  vincent --help              Print this help and exit.
 
 Once running, click ≡ (top-left), right-click anywhere, or double-tap Esc
-for the action menu. See https://github.com/chasereyn/vincent for
-hotkeys and the full feature list.`)
+for the action menu. See https://github.com/chasereyn/vincent for the
+full feature list.`)
 }
 
 // main routes to the action resolveArgs picked. Edit is by far the
@@ -118,20 +124,20 @@ hotkeys and the full feature list.`)
 func main() {
 	res := resolveArgs(os.Args[1:])
 	if res.Err != nil {
-		fmt.Fprintln(os.Stderr, "spiceedit:", res.Err)
+		fmt.Fprintln(os.Stderr, "vincent:", res.Err)
 		os.Exit(1)
 	}
 
 	switch res.Action {
 	case actionVersion:
-		fmt.Println("spiceedit", version.Version)
+		fmt.Println("vincent", version.Version)
 		return
 	case actionHelp:
 		printHelp()
 		return
 	}
 
-	// Single-file mode: when the user invoked `spiceedit somefile.md`,
+	// Single-file mode: when the user invoked `vincent somefile.md`,
 	// skip building the file tree and project file index entirely.
 	// They asked for one file — don't pay the CPU to walk the
 	// surrounding directory just so we can render a sidebar they
@@ -147,13 +153,13 @@ func main() {
 		a, err = app.New(res.RootDir)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "spiceedit: failed to start:", err)
+		fmt.Fprintln(os.Stderr, "vincent: failed to start:", err)
 		os.Exit(1)
 	}
 	defer a.Close()
 
 	if err := a.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "spiceedit:", err)
+		fmt.Fprintln(os.Stderr, "vincent:", err)
 		os.Exit(1)
 	}
 }

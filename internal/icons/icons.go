@@ -39,17 +39,17 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"github.com/chasereyn/vincent/internal/spiceconfig"
+	"github.com/chasereyn/vincent/internal/config"
 )
 
 // Resolve maps a user's IconsMode preference to a concrete on/off
 // decision, running detection iff the mode is "auto". Centralised so
 // the App startup path stays readable: cfg + detect → bool.
-func Resolve(mode spiceconfig.IconsMode) bool {
+func Resolve(mode config.IconsMode) bool {
 	switch mode {
-	case spiceconfig.IconsOn:
+	case config.IconsOn:
 		return true
-	case spiceconfig.IconsOff:
+	case config.IconsOff:
 		return false
 	default:
 		return Detect()
@@ -269,52 +269,52 @@ var nameIcons = map[string]string{
 // language at once. Unmapped extensions return the row's normal
 // foreground via ColorFor's fallback so the row still reads cleanly.
 var extColors = map[string]tcell.Color{
-	".go":        tcell.NewRGBColor(0, 173, 216),
-	".py":        tcell.NewRGBColor(255, 212, 59),
-	".js":        tcell.NewRGBColor(240, 219, 79),
-	".jsx":       tcell.NewRGBColor(97, 218, 251),
-	".ts":        tcell.NewRGBColor(49, 120, 198),
-	".tsx":       tcell.NewRGBColor(97, 218, 251),
-	".rs":        tcell.NewRGBColor(222, 165, 132),
-	".c":         tcell.NewRGBColor(101, 154, 210),
-	".h":         tcell.NewRGBColor(101, 154, 210),
-	".cpp":       tcell.NewRGBColor(101, 154, 210),
-	".cc":        tcell.NewRGBColor(101, 154, 210),
-	".hpp":       tcell.NewRGBColor(101, 154, 210),
-	".java":      tcell.NewRGBColor(176, 114, 25),
-	".rb":        tcell.NewRGBColor(204, 52, 45),
-	".php":       tcell.NewRGBColor(120, 119, 184),
-	".html":      tcell.NewRGBColor(227, 76, 38),
-	".htm":       tcell.NewRGBColor(227, 76, 38),
-	".css":       tcell.NewRGBColor(99, 154, 209),
-	".scss":      tcell.NewRGBColor(204, 102, 153),
-	".sass":      tcell.NewRGBColor(204, 102, 153),
-	".json":      tcell.NewRGBColor(203, 203, 65),
-	".yaml":      tcell.NewRGBColor(203, 65, 65),
-	".yml":       tcell.NewRGBColor(203, 65, 65),
-	".toml":      tcell.NewRGBColor(156, 102, 31),
-	".md":        tcell.NewRGBColor(81, 154, 186),
-	".markdown":  tcell.NewRGBColor(81, 154, 186),
-	".sh":        tcell.NewRGBColor(78, 170, 37),
-	".bash":      tcell.NewRGBColor(78, 170, 37),
-	".zsh":       tcell.NewRGBColor(78, 170, 37),
-	".fish":      tcell.NewRGBColor(78, 170, 37),
-	".sql":       tcell.NewRGBColor(218, 216, 216),
-	".png":       tcell.NewRGBColor(168, 80, 165),
-	".jpg":       tcell.NewRGBColor(168, 80, 165),
-	".jpeg":      tcell.NewRGBColor(168, 80, 165),
-	".gif":       tcell.NewRGBColor(168, 80, 165),
-	".svg":       tcell.NewRGBColor(255, 165, 0),
-	".webp":      tcell.NewRGBColor(168, 80, 165),
-	".vue":       tcell.NewRGBColor(65, 184, 131),
-	".swift":     tcell.NewRGBColor(252, 132, 90),
-	".kt":        tcell.NewRGBColor(247, 137, 24),
-	".dart":      tcell.NewRGBColor(0, 180, 171),
-	".lua":       tcell.NewRGBColor(81, 154, 186),
-	".vim":       tcell.NewRGBColor(129, 184, 14),
-	".lock":      tcell.NewRGBColor(186, 144, 91),
-	".log":       tcell.NewRGBColor(143, 143, 143),
-	".env":       tcell.NewRGBColor(250, 204, 45),
+	".go":       tcell.NewRGBColor(0, 173, 216),
+	".py":       tcell.NewRGBColor(255, 212, 59),
+	".js":       tcell.NewRGBColor(240, 219, 79),
+	".jsx":      tcell.NewRGBColor(97, 218, 251),
+	".ts":       tcell.NewRGBColor(49, 120, 198),
+	".tsx":      tcell.NewRGBColor(97, 218, 251),
+	".rs":       tcell.NewRGBColor(222, 165, 132),
+	".c":        tcell.NewRGBColor(101, 154, 210),
+	".h":        tcell.NewRGBColor(101, 154, 210),
+	".cpp":      tcell.NewRGBColor(101, 154, 210),
+	".cc":       tcell.NewRGBColor(101, 154, 210),
+	".hpp":      tcell.NewRGBColor(101, 154, 210),
+	".java":     tcell.NewRGBColor(176, 114, 25),
+	".rb":       tcell.NewRGBColor(204, 52, 45),
+	".php":      tcell.NewRGBColor(120, 119, 184),
+	".html":     tcell.NewRGBColor(227, 76, 38),
+	".htm":      tcell.NewRGBColor(227, 76, 38),
+	".css":      tcell.NewRGBColor(99, 154, 209),
+	".scss":     tcell.NewRGBColor(204, 102, 153),
+	".sass":     tcell.NewRGBColor(204, 102, 153),
+	".json":     tcell.NewRGBColor(203, 203, 65),
+	".yaml":     tcell.NewRGBColor(203, 65, 65),
+	".yml":      tcell.NewRGBColor(203, 65, 65),
+	".toml":     tcell.NewRGBColor(156, 102, 31),
+	".md":       tcell.NewRGBColor(81, 154, 186),
+	".markdown": tcell.NewRGBColor(81, 154, 186),
+	".sh":       tcell.NewRGBColor(78, 170, 37),
+	".bash":     tcell.NewRGBColor(78, 170, 37),
+	".zsh":      tcell.NewRGBColor(78, 170, 37),
+	".fish":     tcell.NewRGBColor(78, 170, 37),
+	".sql":      tcell.NewRGBColor(218, 216, 216),
+	".png":      tcell.NewRGBColor(168, 80, 165),
+	".jpg":      tcell.NewRGBColor(168, 80, 165),
+	".jpeg":     tcell.NewRGBColor(168, 80, 165),
+	".gif":      tcell.NewRGBColor(168, 80, 165),
+	".svg":      tcell.NewRGBColor(255, 165, 0),
+	".webp":     tcell.NewRGBColor(168, 80, 165),
+	".vue":      tcell.NewRGBColor(65, 184, 131),
+	".swift":    tcell.NewRGBColor(252, 132, 90),
+	".kt":       tcell.NewRGBColor(247, 137, 24),
+	".dart":     tcell.NewRGBColor(0, 180, 171),
+	".lua":      tcell.NewRGBColor(81, 154, 186),
+	".vim":      tcell.NewRGBColor(129, 184, 14),
+	".lock":     tcell.NewRGBColor(186, 144, 91),
+	".log":      tcell.NewRGBColor(143, 143, 143),
+	".env":      tcell.NewRGBColor(250, 204, 45),
 }
 
 // nameColors handles full-filename matches (Dockerfile, Makefile,

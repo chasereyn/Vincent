@@ -1,0 +1,19 @@
+# Vincent is developed on Windows today and moves to macOS later, so line
+# endings are pinned to LF in the repository. Without this, git's autocrlf
+# rewrites Go sources to CRLF on checkout and `gofmt -l` reports every file
+# as unformatted — which is how this file came to exist.
+* text=auto eol=lf
+
+*.go   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+
+Makefile text eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary

@@ -1,17 +1,20 @@
 # =============================================================================
 # File: .github/workflows/test.yml
-# Author: Spicer Matthews <spicer@cloudmanic.com>
-# Created: 2026-04-30
-# Copyright: 2026 Cloudmanic, LLC. All rights reserved.
+# Copyright: 2026 Chase Reynolds. All rights reserved.
+#
+# Derived from spice-edit's test workflow (Copyright 2026 Cloudmanic, LLC,
+# MIT licensed).
 # =============================================================================
 #
-# Test pipeline for SpiceEdit. Runs `go test ./...` with the race detector
-# on every push and every pull request, on Linux + macOS so we catch
-# platform-specific flakes before they ship. The release workflow
-# (release.yml) doesn't depend on this — it triggers separately on push
-# to main — but a red test job is meant to block merges via the PR's
-# required-checks setting (configure that on GitHub once the first run
-# is green).
+# Test pipeline for Vincent. Runs `go test ./...` with the race detector on
+# every push and pull request.
+#
+# Windows is in the matrix deliberately. spice-edit tested Linux + macOS
+# only, and as a result eighteen of its tests failed on Windows — every one
+# of them a POSIX path literal baked into an assertion rather than a real
+# bug in the code under test. Vincent is developed on Windows today and
+# moves to macOS later, so all three run here and that class of failure
+# cannot come back unnoticed.
 
 name: Test
 
@@ -32,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

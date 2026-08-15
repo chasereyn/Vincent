@@ -1,190 +1,239 @@
-<!--
-  File: CLAUDE.md
-  Author: Spicer Matthews <spicer@cloudmanic.com>
-  Created: 2026-04-29
-  Copyright: 2026 Cloudmanic, LLC. All rights reserved.
--->
+# CLAUDE.md — Vincent
 
-# CLAUDE.md — SpiceEdit
+Read this before touching anything. It captures decisions that are not
+obvious from the code, and several places where Vincent deliberately
+disagrees with the codebase it was forked from.
 
-Project-specific guidance for Claude Code. Read this first; it captures
-conventions and design decisions that aren't obvious from the code alone.
+## What Vincent is
 
-## What this project is
+**A read-only, mouse-first terminal client for reviewing code that AI
+agents wrote.** File tree on the left, the file or its diff in the middle,
+a Zed-shaped git panel on the right. You click lines in a diff, write a
+review note, and one keypress delivers those notes back to the agent that
+wrote the code.
 
-SpiceEdit is an opinionated, **mouse-first** terminal code editor aimed at
-SSH-into-tmux workflows. It looks and behaves like a tiny VS Code: file
-tree on the left, tabs across the top, syntax-highlighted editor in the
-middle, status bar at the bottom. It ships as a single static Go binary
-with no CGO.
+Vincent is **not an editor**. It has no insert mode, no save, no undo, no
+LSP, no autocomplete. If a change you are asked to make would let a user
+type a character into a file, stop and confirm — that is a scope change,
+not a feature.
 
-Users open the action menu (Save, Quit, Show/Hide Sidebar, …) by clicking
-the `≡` icon, right-clicking, or double-tapping `Esc`. There are
-intentionally **no `Ctrl+` shortcuts** for editor actions — they conflict
-with `tmux` and terminal emulators. Don't add them back.
+The person using Vincent does not write code. Agents write it; he reviews
+it. Every design decision should optimise for reading a diff quickly and
+getting feedback back to an agent — not for authoring.
 
-**Every file action also lives in the main ≡ menu.** macOS Terminal +
-tmux often swallows Button3 (right-click), so the editor cannot rely on
-right-click as the only path to anything. Tree right-click is a redundant
-shortcut, not a primary surface — when adding new file-management
-features, make sure they're reachable from the main menu first.
+## Provenance
 
-## Module / repo
+Forked from [spice-edit](https://github.com/cloudmanic/spice-edit) at
+`5b4adc5` (MIT, Copyright 2026 Cloudmanic, LLC). spice-edit is a terminal
+*editor*; Vincent keeps its shell and deletes its editing half.
+
+Upstream file headers still carry Spicer Matthews' authorship and the
+Cloudmanic copyright. **Leave them.** That is the MIT attribution
+requirement, not a leftover to tidy up. New files get a Chase Reynolds
+header plus a note saying what upstream file they derive from, if any —
+see `internal/app/pathops.go` for the pattern.
+
+## Module
 
 - Module: `github.com/chasereyn/vincent`
-- Binary name: `spiceedit` (one word, lowercase — Makefile, goreleaser,
-  brew formula all assume this)
-- Brew tap: this same repo, `Formula/` directory (no separate tap repo)
+- Binary: `vincent`
+- Version: `internal/version/version.go`, currently `0.1.0`
+
+## Where it stands
+
+Phase 0 is done: the fork builds, the full suite is green on Windows, and
+every surface is black. Nothing Vincent-specific has been built yet — what
+exists is spice-edit with its editing half removed.
+
+Already stripped:
+
+| Gone | Why |
+|---|---|
+| `internal/format`, `app/format.go`, `app/formmodal.go` | format-on-save, formatter trust prompts, multi-field form modal |
+| `internal/customactions`, `app/actionvars.go` | user-defined shell-outs |
+| `app/fileops.go` | create / rename / delete. The copy-path half survives as `app/pathops.go` |
+| brew formula, goreleaser, install.sh, website, samples | upstream distribution machinery |
+
+**Still present and still to remove:** `internal/editor/undo.go`,
+`comment.go`, `indent.go`, and the mutation half of `tab.go`
+(`InsertRune`, `Backspace`, `Delete`, dirty-state, save). These were left
+in place on purpose. `tab.go` is woven into the undo stack — deleting
+`undo.go` alone produces eleven compile errors in `tab.go` — so making the
+buffer read-only is a **design task**, not a deletion. Decide what `Tab`
+becomes first (an immutable view over `[]string`?), then the three files
+fall out on their own.
 
 ## Architecture map
 
 ```
-main.go                       Entry — parses optional rootDir arg
-internal/app/app.go           Event loop, layout, menu modal, splitter, all rendering
-internal/editor/buffer.go     Position + Buffer ([]string lines), edit primitives
-internal/editor/tab.go        Tab: path, buffer, cursor, anchor, scroll, dirty state
-internal/editor/highlight.go  Chroma → []tcell.Style per line
-internal/filetree/filetree.go Lazy tree, identity-preserving refresh, hit-test, render
-internal/clipboard/clipboard.go OSC 52 to /dev/tty with tmux passthrough wrap
-internal/spiceconfig/spiceconfig.go ~/.config/spiceedit/config.json loader (icons mode)
-internal/icons/icons.go       Nerd Font detection + per-file glyph mapping
-internal/theme/theme.go       Tokyo Night palette + syntax color mapping
-internal/version/version.go   const Version = "x.y.z" — single line, CI bumps it
+main.go                          CLI parsing — pure, testable, no tcell until the end
+internal/app/app.go        2507  Event loop, layout rects, mouse dispatch, rendering
+internal/app/modals.go     1073  Modal scaffolding — reuse for the review composer
+internal/app/finder.go      474  Fuzzy file-finder modal
+internal/app/gitstatus.go   393  git status / diff shell-outs + porcelain parsing
+internal/app/find.go        297  In-file find bar
+internal/app/pathops.go     106  Copy relative / absolute path to clipboard
+internal/app/leader.go       65  Esc-prefixed key bindings
+internal/editor/tab.go      808  Tab: buffer, cursor, scroll, hit-test  <- still mutable
+internal/editor/highlight.go 185 Chroma -> per-rune []tcell.Style grid
+internal/filetree           585  Lazy tree, identity-preserving refresh, hit-test
+internal/finder             583  Filename index (git ls-files) + fzy-style scorer
+internal/icons              390  Nerd Font glyphs per file type
+internal/theme              143  The palette. All surfaces pure black
+internal/config             133  ~/.config/vincent/config.json
+internal/clipboard           50  OSC 52 — works over SSH and through tmux
 ```
 
-## Conventions
+## Non-negotiables
 
-### File headers
-Every new source file gets the header block (file name, author, created
-date, copyright year). See existing files for the exact format. Keep
-copyright year matching the **current year** (2026 right now).
+These are hard requirements from the person this is built for. Do not
+trade them away for convenience.
 
-### Comments
-- A short doc comment above every function (public **and** private)
-  explaining intent. This is a project-wide convention — don't skip it.
-- Skip throwaway "what" comments inside functions; favor "why" notes
-  for non-obvious decisions.
+1. **Pure black background.** Set explicitly, never `tcell.ColorDefault` —
+   that inherits the host terminal and will not reliably be black.
+2. **Mouse-first.** Herdr is the quality bar. Click, drag, and scroll work
+   everywhere; keyboard is the supplement. This is the opposite of the
+   usual TUI convention, so design it in rather than bolting it on.
+3. **Single static binary.** No cgo, no runtime, no external binaries at
+   run time. This is why highlighting is Chroma and not tree-sitter, and
+   why the diff renderer must be in-process rather than shelling out to
+   `delta`. `git` and `herdr` are the only exceptions — both are shelled
+   out to deliberately.
+4. **Read-only.** One exception, `git checkout`, because branch switching
+   was asked for by name. Everything else that mutates belongs to lazygit.
 
-### Tests — required, not optional
-**Every source file gets a corresponding `_test.go` file in the same
-package.** New code without tests should not be merged. The bar:
-
-- New exported functions: cover happy path + the obvious failure mode.
-- New unexported helpers with non-trivial logic: same.
-- Bug fixes: add a test that fails before the fix and passes after.
-- Pure data / glue (theme palettes, single-constant files): a smoke
-  test that the value is sensible is enough.
-
-Conventions:
-- One `_test.go` per source file, in the same package (NOT `_test`),
-  so tests can poke unexported helpers directly. Don't split tests
-  for one source file across multiple test files.
-- Each `Test*` function gets a short doc comment above it explaining
-  the behavior it pins down — the same "why over what" rule as
-  production code. See `internal/app/fileops_test.go` for the style.
-- Use `t.TempDir()` for filesystem state; never write into the repo
-  or `/tmp` directly.
-- For UI / drawing code that takes a `tcell.Screen`, build one with
-  `tcell.NewSimulationScreen("UTF-8")` and assert against
-  `scr.GetContents()`.
-- Skip a test (`t.Skip`) only when the environment can't satisfy a
-  hard requirement (e.g. `/dev/tty` in CI). Don't skip to dodge a
-  flaky test — fix it.
-
-Run them locally:
-```sh
-make test          # go test ./... with race detector
-make coverage      # generates coverage.out + an HTML report
-```
-
-CI (`.github/workflows/test.yml`) runs `go test ./...` on every push
-and every PR; broken tests block merges via the PR's required-checks.
-
-### Commits
-- No "Generated with Claude Code" trailers, no Co-Authored-By Claude.
-- Don't ask for commit-message approval — commit directly with a good
-  message when the user asks you to commit.
-
-## Design patterns to preserve
-
-### `cursorMoved` flag (tab.go)
-The cursor only triggers `EnsureVisible` when something actually moved
-the cursor. Every cursor mutator sets `t.cursorMoved = true`; `Render`
-consumes the flag and clears it. **Do not** call `EnsureVisible`
-unconditionally — that re-introduces the "scroll yanks back to cursor
-on every tick" bug.
-
-### Scroll clamping with overscroll
-`tab.clampScroll(viewH)` allows the last line to scroll roughly to the
-middle (`overscroll = max(viewH/2, 3)`). This is intentional — without
-it, you can't comfortably read the bottom of a file.
-
-### Custom tcell events for goroutine → main-loop messaging
-Background work (auto-scroll during drag, 10s tree refresh) posts custom
-events (`autoScrollEvent`, `treeRefreshEvent`) onto the tcell event queue
-and the main loop handles them. Don't mutate UI state from goroutines
-directly.
-
-### Identity-preserving tree refresh (filetree.go)
-`reload` walks the existing children, matches survivors by name, and
-keeps their `*Node` pointers (and their `Expanded` state). New entries
-get fresh nodes; gone entries are dropped. This is what makes the
-10-second auto-refresh feel non-jarring — open folders stay open.
-
-### Three-way external-change reconciliation (app.go)
-On each tree-refresh tick, `reconcileOpenTabsWithDisk` checks each open
-tab's mtime: clean buffer + changed file → silent reload; dirty buffer
-+ changed file → warning; file deleted → set `DiskGone` once.
-
-### Modal layout via `relY` and dynamic `labelFor`
-The action menu uses named struct literals with an optional `labelFor`
-hook so labels like "Show Sidebar" / "Hide Sidebar" toggle in place.
-Dividers are drawn at fixed `relY` offsets — when adding a menu item,
-update those offsets and `modalHeight`.
-
-### Sidebar splitter drag
-A drag is detected when a press lands at exactly `x == splitterX()`.
-Min widths: `minSidebarWidth = 18`, `minEditorAfterDrag = 40`. Don't
-let the editor shrink below that.
-
-## Build / run
+## Build
 
 ```sh
-make run          # go run . in current dir
-make build        # build to ./bin/spiceedit
-make build-linux  # cross-compile linux/amd64
-make install      # go install to $GOPATH/bin
-make tidy         # go mod tidy
-make clean        # rm -rf bin
+make build        # ./bin/vincent
+make test         # go test ./...
+make build-mac    # darwin/arm64 cross-compile
 ```
 
-There's no `dev server` to run for this project — it's a TUI. To test
-UI behavior, build and run it against a real directory.
+`make`, `go`, and `git` come from scoop on this machine. There is no dev
+server — it is a TUI. To check UI behaviour, build and run it against a
+real directory.
 
-## Releases (don't break this)
+`make test` runs **without** `-race` on purpose. The race detector needs
+cgo, and this machine builds with `CGO_ENABLED=0` — no C compiler, which
+is also what keeps the binary static. CI runners do have one, so
+`.github/workflows/test.yml` runs `-race` on all three platforms; locally
+that is `make test-race`, which needs `scoop install mingw` on Windows.
 
-Pushes to `main` trigger `.github/workflows/release.yml`:
+This matters more than it looks: the goroutine-to-UI-thread pattern
+(custom tcell events) is exactly the kind of code the race detector
+catches problems in, and every new background worker — the git status
+poller, the multi-repo indexer, the content-search pool — lands in that
+pattern. Do not assume local green means race-free.
 
-1. Reads `internal/version/version.go`.
-2. **If that file was edited in the pushed commit**, the version is used
-   as-is (manual major/minor bump). **Otherwise** the patch is
-   auto-bumped, committed back to main with `[skip ci]`, and pushed.
-3. Tags `v<x.y.z>`.
-4. GoReleaser cross-compiles, attaches archives to a GitHub Release,
-   and writes `Formula/spice-edit.rb` back into this repo (using the
-   default `GITHUB_TOKEN` — no PAT). The formula commit also carries
-   `[skip ci]` to break the loop.
+## Conventions inherited from upstream (keep them)
 
-If you're touching the workflow or `.goreleaser.yml`, make sure both
-auto-commits keep their `[skip ci]` markers — without them the workflow
-loops forever.
+- **A doc comment above every function**, exported and unexported, saying
+  why it exists. Project-wide; do not skip it.
+- **One `_test.go` per source file**, same package (not `_test`), so tests
+  can reach unexported helpers. Each `Test*` gets a doc comment saying what
+  behaviour it pins.
+- `t.TempDir()` for filesystem state. Never write into the repo.
+- For drawing code, build a screen with
+  `tcell.NewSimulationScreen("UTF-8")` and assert on `scr.GetContents()`.
+- **No `Ctrl+` shortcuts.** They fight tmux and terminal emulators — that
+  is the entire reason the action menu exists. Use `Esc`-prefixed leader
+  keys instead (see `leader.go`).
+- **Every right-click action must also live in the main menu.** macOS
+  Terminal under tmux swallows button 3. Right-click is a redundant
+  shortcut, never the only path to something.
 
-## What NOT to add
+## Patterns worth preserving
 
-- `Ctrl+` editor shortcuts (they fight tmux/terminals — that's the
-  whole reason the action menu exists).
-- A config file / dotfile / plugin system. SpiceEdit is opinionated.
-- CGO dependencies. The whole point is one static binary.
-- Tree-sitter. We use Chroma intentionally — pure Go, no setup.
-- A separate `homebrew-tap` repo. The formula lives here under
-  `Formula/` and that's deliberate.
+- **`cursorMoved` flag (`tab.go`).** `EnsureVisible` only fires when
+  something actually moved the cursor. Calling it unconditionally
+  re-introduces the "scroll yanks back on every tick" bug.
+- **Custom tcell events for goroutine to UI messaging.** Background work
+  posts `autoScrollEvent` / `treeRefreshEvent` / `finderRebuiltEvent` onto
+  the tcell queue and the main loop handles them. Never mutate UI state
+  from a goroutine. The git status poller and multi-repo indexer should
+  use exactly this.
+- **Identity-preserving tree refresh (`filetree.go`).** `reload` matches
+  survivors by name and keeps their `*Node` pointers, so open folders stay
+  open across a refresh. This is what makes auto-refresh non-jarring.
+- **Viewport-bounded highlighting (`highlight.go`).** Only a 256-line lead
+  above and below the viewport is tokenised, so scrolling a huge file stays
+  O(viewport). Keep this when the diff viewer lands — agent diffs get big.
+- **Drag-mode state machine (`app.go`).** One `dragMode` string field
+  distinguishes splitter-drag from selection-drag. Add the git panel's
+  border drag to it rather than inventing a parallel flag.
+
+## Terminal quirks already solved here
+
+Each of these cost someone real time to find. Do not regress them.
+
+- **Zellij** sends Shift as a separate zero-button event *before* the wheel
+  event. `handleMouse` tracks a sticky shift window to bridge it.
+- **macOS Terminal + tmux** swallows right-click — hence the menu rule above.
+- **Shift+mouse must no-op** so the terminal's own native selection and
+  copy still work.
+
+## Cross-platform
+
+Developed on Windows now, moving to macOS. CI runs Linux, macOS, **and
+Windows**.
+
+Upstream tested Linux and macOS only, and eighteen of its tests failed on
+Windows — every one a POSIX path literal baked into a test assertion, not a
+real bug. Those are fixed here. **Never write `"/tmp/repo/file.go"` in a
+test**; build paths with `filepath.Join` so the assertion uses the
+platform separator. Same for `os.UserHomeDir`, which reads `USERPROFILE`
+on Windows and `HOME` elsewhere.
+
+`.gitattributes` pins everything to LF. Without it git's autocrlf rewrites
+Go sources on checkout and `gofmt -l` flags every file.
+
+## Roadmap
+
+Full plan, with the research behind each decision:
+<https://claude.ai/code/artifact/f4e134ac-f25c-4f7f-8e85-0658e4a18a27>
+
+| Phase | What | Status |
+|---|---|---|
+| 0 | Fork, strip, blacken | **done** |
+| 1 | Inline (Zed-style) diff viewer | next |
+| 2 | Review notes + herdr/clipboard handoff | |
+| 3 | Zed-shaped read-only git panel + branch checkout | |
+| 4 | Multi-repo workspace | |
+| 5 | Content search + markdown renderer | |
+
+Split (side-by-side) diffs come after phase 1's inline view lands — inline
+first was an explicit call.
+
+### Phase 1 notes
+
+Port herdr-sidebar's `diffview.rs` (~300 lines, cloned at
+`~/Downloads/herdr-sidebar`): parse `@@` hunks from plain `git diff`,
+track old/new line counters, row tints, and a darker word-level tint on
+paired change lines. In-process — do not shell out to `delta`.
+
+`gitstatus.go` already has the primitives: `parseHunkHeader`,
+`parseDiffRange`, `parseGitHunkPreview`, and a gutter-click that opens a
+hunk in a modal. The diff viewer is that logic promoted from a text modal
+to a real panel.
+
+### Phase 2 notes
+
+The handoff is three `herdr` CLI calls — `agent list`, `pane send-text`
+(bracketed-paste wrapped), `agent focus`. Two rules that are easy to get
+wrong and expensive to debug:
+
+- **Consume on success.** Clear the comment batch only after the send
+  returns OK, or a closed pane silently eats a review.
+- **Never rebase line numbers.** Freeze the verbatim diff snippet as the
+  anchor. When the agent rewrites the file the snippet is the durable
+  evidence; just flag the comment stale if its file leaves the changeset.
+
+Reference implementation: `~/Downloads/herdr-reviewr`. Comment composer UX
+to match: `~/Downloads/tuicr`.
+
+## Commits
+
+- No "Generated with Claude Code" trailers, no Co-Authored-By.
+- Commit directly with a good message when asked; don't ask for approval
+  on the message.
