@@ -10,6 +10,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,9 +61,10 @@ func TestHandleKey_LeaderSave(t *testing.T) {
 	}
 }
 
-// TestHandleKey_LeaderUndoRedo round-trips an edit through Esc-u and
-// Esc-r. Pins down both bindings at once and the fact that the leader
-// state resets between sequences (we re-arm Esc each time).
+// TestHandleKey_LeaderUndoRedo round-trips an edit through Esc-u and then
+// back through the Redo menu action. Redo has no leader key: phase 3 gave
+// Esc r to the review composer, and redo kept only its menu row. Undo is
+// still driven through the leader here, which is what the test pins.
 func TestHandleKey_LeaderUndoRedo(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "t.txt")
@@ -79,10 +81,60 @@ func TestHandleKey_LeaderUndoRedo(t *testing.T) {
 		t.Fatalf("Esc-u should have undone the insert, got %q", a.activeTabPtr().Buffer.Lines[0])
 	}
 
+	a.menuRedo()
+	if a.activeTabPtr().Buffer.Lines[0] != "a" {
+		t.Fatalf("Redo should have re-applied the insert, got %q", a.activeTabPtr().Buffer.Lines[0])
+	}
+}
+
+// TestHandleKey_LeaderReviewComposer pins the rebinding itself: Esc-r on a
+// diff opens the composer rather than redoing an edit. Without this the
+// swap could silently regress to Redo and nobody would notice until a
+// review note failed to open.
+func TestHandleKey_LeaderReviewComposer(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tabs = append(a.tabs, newTestDiffTab())
+	a.activeTab = 0
+
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
 	a.handleKey(keyEv(tcell.KeyRune, 'r'))
-	if a.activeTabPtr().Buffer.Lines[0] != "a" {
-		t.Fatalf("Esc-r should have redone the insert, got %q", a.activeTabPtr().Buffer.Lines[0])
+
+	if !a.composerOpen {
+		t.Fatal("Esc-r on a diff should open the review composer")
+	}
+}
+
+// TestLeaderActionForKey_EnterSendsReview pins the named-key half of the
+// leader table. Enter is not a rune, so it needs its own lookup — and the
+// send action must be reachable from it.
+func TestLeaderActionForKey_EnterSendsReview(t *testing.T) {
+	if leaderActionForKey(tcell.KeyEnter) == nil {
+		t.Fatal("Esc-Enter should be bound")
+	}
+	if leaderActionForKey(tcell.KeyTab) != nil {
+		t.Fatal("Tab should not be a named-key leader binding")
+	}
+	for _, b := range leaderKeyBindings() {
+		if leaderActionForKey(b.key) == nil {
+			t.Errorf("named binding %v resolved to nil", b.key)
+		}
+	}
+}
+
+// TestHandleKey_LeaderEnterSendsReview drives the named-key leader through
+// handleKey itself, which is the part that could regress silently: the rune
+// table is consulted first, and an early return there would leave Esc-Enter
+// dead with every unit test on leaderActionForKey still green.
+func TestHandleKey_LeaderEnterSendsReview(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyEnter, 0))
+
+	// With an empty batch the action's own precondition fires, which is
+	// exactly the observable proof that it ran at all.
+	if !strings.Contains(a.statusMsg, "No review notes") {
+		t.Fatalf("Esc-Enter should have reached sendReview; flash = %q", a.statusMsg)
 	}
 }
 

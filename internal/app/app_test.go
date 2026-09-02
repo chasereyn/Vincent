@@ -1604,18 +1604,19 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 // spice-edit's when Vincent went read-only: New file / Rename file /
 // Delete file / Rename folder / Delete folder left the File actions
 // group, taking five rows with them. The Review group then arrived with
-// View diff and the changes-panel toggle.
+// View diff and the changes-panel toggle, and grew by three more in phase
+// 3: Add review note, Send review to agent, Copy review to clipboard.
 func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	items, dividers, h := a.menuLayout()
 
-	if h != 29 {
-		t.Errorf("modalHeight = %d, want 29", h)
+	if h != 32 {
+		t.Errorf("modalHeight = %d, want 32", h)
 	}
-	if got := len(items); got != 18 {
-		t.Errorf("item count = %d, want 18 built-ins", got)
+	if got := len(items); got != 21 {
+		t.Errorf("item count = %d, want 21 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 16, 19, 24, 26}
+	wantDiv := []int{2, 6, 10, 16, 19, 22, 27, 29}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1653,22 +1654,28 @@ func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
 func TestMenuLayout_Shortcuts(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	want := map[string]string{
-		"Save":                 "Esc s",
-		"Save & close tab":     "",
-		"Close tab":            "Esc w",
-		"Undo":                 "Esc u",
-		"Redo":                 "Esc r",
-		"Revert file":          "",
-		"Find in file":         "Esc f",
-		"Find file in project": "Esc p",
-		"Copy relative path":   "",
-		"Copy absolute path":   "",
-		"Copy selection":       "",
-		"Cut selection":        "",
-		"Paste":                "",
-		"Toggle line comment":  "Esc /",
-		"Hide file explorer":   "Esc t",
-		"Quit editor":          "Esc q",
+		"Save":             "Esc s",
+		"Save & close tab": "",
+		"Close tab":        "Esc w",
+		"Undo":             "Esc u",
+		// Redo lost Esc r in phase 3: the leader key now opens the review
+		// composer, which is a far more common gesture in a review client
+		// than redo is in a read-only one.
+		"Redo":                     "",
+		"Revert file":              "",
+		"Add review note":          "Esc r",
+		"Send review to agent":     "Esc ⏎",
+		"Copy review to clipboard": "Esc y",
+		"Find in file":             "Esc f",
+		"Find file in project":     "Esc p",
+		"Copy relative path":       "",
+		"Copy absolute path":       "",
+		"Copy selection":           "",
+		"Cut selection":            "",
+		"Paste":                    "",
+		"Toggle line comment":      "Esc /",
+		"Hide file explorer":       "Esc t",
+		"Quit editor":              "Esc q",
 	}
 
 	items, _, _ := a.menuLayout()

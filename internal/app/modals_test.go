@@ -1126,3 +1126,52 @@ func TestDirtyButtonAtRelX_HitsAndMisses(t *testing.T) {
 		}
 	}
 }
+
+// TestEditRunes_ReportsWhatItHandled pins the extracted text-editing
+// helper, which the prompt modal and the review composer now share. The
+// handled flag is the contract that matters: it is how the composer tells
+// a keystroke it should ignore from one that simply changed nothing.
+func TestEditRunes_ReportsWhatItHandled(t *testing.T) {
+	val, cur, ok := editRunes([]rune("ab"), 2, keyEv(tcell.KeyRune, 'c'))
+	if string(val) != "abc" || cur != 3 || !ok {
+		t.Fatalf("insert = %q cur=%d ok=%v", string(val), cur, ok)
+	}
+	val, cur, ok = editRunes(val, cur, keyEv(tcell.KeyBackspace2, 0))
+	if string(val) != "ab" || cur != 2 || !ok {
+		t.Fatalf("backspace = %q cur=%d ok=%v", string(val), cur, ok)
+	}
+	// Backspace at column zero is handled but changes nothing.
+	val, cur, ok = editRunes(val, 0, keyEv(tcell.KeyBackspace2, 0))
+	if string(val) != "ab" || cur != 0 || !ok {
+		t.Fatalf("backspace at 0 = %q cur=%d ok=%v", string(val), cur, ok)
+	}
+	// A control rune and an unrelated key are both refused.
+	if _, _, ok := editRunes([]rune("ab"), 1, keyEv(tcell.KeyRune, 0x01)); ok {
+		t.Error("a control rune should not be handled")
+	}
+	if _, _, ok := editRunes([]rune("ab"), 1, keyEv(tcell.KeyF5, 0)); ok {
+		t.Error("F5 should not be handled")
+	}
+	// An out-of-range cursor is clamped rather than panicking — the
+	// composer can be reopened on a shorter note than the last one.
+	if _, cur, _ := editRunes([]rune("ab"), 99, keyEv(tcell.KeyLeft, 0)); cur != 1 {
+		t.Errorf("clamped cursor = %d, want 1", cur)
+	}
+}
+
+// TestScrollWindow_KeepsTheCaretVisible pins the shared horizontal-scroll
+// helper in both directions, plus the degenerate zero-width case.
+func TestScrollWindow_KeepsTheCaretVisible(t *testing.T) {
+	if got := scrollWindow(2, 0, 10); got != 0 {
+		t.Errorf("caret already visible: got %d, want 0", got)
+	}
+	if got := scrollWindow(12, 0, 10); got != 3 {
+		t.Errorf("caret past the right edge: got %d, want 3", got)
+	}
+	if got := scrollWindow(1, 5, 10); got != 1 {
+		t.Errorf("caret left of the window: got %d, want 1", got)
+	}
+	if got := scrollWindow(4, 2, 0); got != 0 {
+		t.Errorf("zero width: got %d, want 0", got)
+	}
+}

@@ -135,10 +135,23 @@ func TestGitPanel_RendersSectionsAndFooter(t *testing.T) {
 		t.Error("fresh.txt is untracked but rendered above the Untracked header")
 	}
 
-	// Footer: repo name and branch.
-	footer := panel[h-1]
-	if !strings.Contains(footer, filepath.Base(dir)) || !strings.Contains(footer, "main") {
-		t.Errorf("footer = %q, want the repo name and branch", footer)
+	// Footer: the repo / branch row, then the review block under it. The
+	// branch row is no longer the last row of the panel — phase 3's review
+	// block sits below it, where Zed puts its commit box — so find it by
+	// content rather than by position.
+	branch := ""
+	for _, row := range panel {
+		if strings.Contains(row, "⑂") {
+			branch = row
+		}
+	}
+	if !strings.Contains(branch, filepath.Base(dir)) || !strings.Contains(branch, "main") {
+		t.Errorf("branch row = %q, want the repo name and branch", branch)
+	}
+	// With no notes pending, the review block collapses to one dimmed
+	// line that says how to make one — the last row of the panel.
+	if got := panel[h-1]; !strings.Contains(got, "No review notes") {
+		t.Errorf("last footer row = %q, want the empty review-block line", got)
 	}
 }
 
