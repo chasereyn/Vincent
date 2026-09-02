@@ -564,6 +564,107 @@ func TestRootPicker_WheelScrollsWithoutMovingHighlight(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// Drawing
+// -----------------------------------------------------------------------------
+
+// screenText reads one row of the simulation screen back as a string, so a
+// draw test can assert on what the user would actually see.
+func screenText(t *testing.T, a *App, y int) string {
+	t.Helper()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+	var b strings.Builder
+	for x := 0; x < w; x++ {
+		runes := cells[y*w+x].Runes
+		if len(runes) == 0 {
+			b.WriteRune(' ')
+			continue
+		}
+		b.WriteRune(runes[0])
+	}
+	return b.String()
+}
+
+// TestDrawRootPicker_PaintsTitleAndRecents proves the modal reaches the
+// screen: the title row, and a recent folder rendered with the home
+// directory abbreviated where it applies.
+func TestDrawRootPicker_PaintsTitleAndRecents(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "someproject")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	a := newTestApp(t, t.TempDir())
+	seedRecents(t, a, target)
+
+	a.openRootPicker()
+	a.drawRootPicker()
+	a.screen.Show()
+
+	_, my, _, _ := a.rootPickerModalRect()
+	if title := screenText(t, a, my+1); !strings.Contains(title, "Change root") {
+		t.Errorf("title row = %q, want it to contain \"Change root\"", title)
+	}
+	// The row is clipped from the LEFT when it doesn't fit, so the folder
+	// name survives. A temp-dir path is long enough to exercise that,
+	// which is exactly the case a right-clip would render as ten rows of
+	// identical prefix with nothing to tell them apart.
+	rect := a.rootPicker.rowRects[0]
+	if row := screenText(t, a, rect.y); !strings.Contains(row, "someproject") {
+		t.Errorf("row = %q, want it to contain the recent folder's name", row)
+	}
+}
+
+// TestDrawRootPickerRow_ClipsFromTheLeft pins the clip direction on its own,
+// with a label long enough to force it and no path noise in the assertion.
+func TestDrawRootPickerRow_ClipsFromTheLeft(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	seedRecents(t, a)
+	a.openRootPicker()
+
+	mx, my, mw, _ := a.rootPickerModalRect()
+	long := strings.Repeat("deep/", 40) + "vincent"
+	a.drawRootPickerRow(mx, my+4, mw, rootPickerRow{label: long}, false,
+		tcell.StyleDefault, a.theme.LineHL)
+	a.screen.Show()
+
+	row := screenText(t, a, my+4)
+	if !strings.Contains(row, "vincent") {
+		t.Errorf("row = %q, want the tail (vincent) to survive the clip", row)
+	}
+	if !strings.Contains(row, "…") {
+		t.Errorf("row = %q, want an ellipsis marking the clip", row)
+	}
+}
+
+// TestDrawRootPicker_BrowseHeaderShowsWhereYouAre pins the header's job in
+// browse mode. It is the only thing on screen that says what Enter with
+// nothing highlighted would pick, so a change that drops it makes the mode
+// unnavigable rather than merely plainer.
+func TestDrawRootPicker_BrowseHeaderShowsWhereYouAre(t *testing.T) {
+	dir := browseDirs(t)
+	a := newTestApp(t, t.TempDir())
+	seedRecents(t, a)
+
+	a.openRootPicker()
+	typeQuery(a, dir+string(filepath.Separator))
+	a.drawRootPicker()
+	a.screen.Show()
+
+	_, my, _, _ := a.rootPickerModalRect()
+	header := screenText(t, a, my+1)
+	if !strings.Contains(header, filepath.Base(dir)) {
+		t.Errorf("header = %q, want the browsed directory's name %q",
+			header, filepath.Base(dir))
+	}
+	// And the footer's pick button, since it is browse mode's mouse route
+	// to choosing this folder.
+	footer := screenText(t, a, a.rootPicker.useY)
+	if !strings.Contains(footer, "Use this folder") {
+		t.Errorf("footer = %q, want the Use this folder button", footer)
+	}
+}
+
+// -----------------------------------------------------------------------------
 // setRoot
 // -----------------------------------------------------------------------------
 

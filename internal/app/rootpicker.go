@@ -1028,7 +1028,16 @@ func (a *App) drawRootPicker() {
 
 // drawRootPickerRow paints one list row, with the row background flipped on
 // the highlighted one and the fuzzy scorer's matched runes lit. Mirrors
-// drawFinderRow so the two lists read identically.
+// drawFinderRow so the two lists read identically, with one deliberate
+// difference: a row too long for the modal is clipped from the LEFT, not the
+// right.
+//
+// That difference is the whole point of the row. These are paths, and the
+// deepest segment — "vincent", "sarita" — is what identifies the folder;
+// clipping the right end (which is what the finder does, because a filename
+// starts at its left) leaves ten rows of identical temp-directory prefix and
+// nothing to tell them apart. The matched-rune highlights are shifted to
+// follow the clip so the scorer's hits stay on the characters they scored.
 func (a *App) drawRootPickerRow(mx, ry, mw int, row rootPickerRow, selected bool, hitStyle tcell.Style, modalBG tcell.Color) {
 	rowBG := modalBG
 	if selected {
@@ -1055,12 +1064,29 @@ func (a *App) drawRootPickerRow(mx, ry, mw int, row rootPickerRow, selected bool
 	}
 	startCol := mx + 2
 	maxCols := mw - 4
-	for i, ch := range []rune(row.label) {
+	if maxCols <= 0 {
+		return
+	}
+	runes := []rune(row.label)
+	// shift maps a drawn column back to its index in row.label, so
+	// matchSet still lines up after a left clip. clipped marks column 0 as
+	// the ellipsis, which is never a match however the arithmetic lands.
+	shift, clipped := 0, false
+	if len(runes) > maxCols && maxCols > 1 {
+		start := len(runes) - (maxCols - 1)
+		trimmed := make([]rune, 0, maxCols)
+		trimmed = append(trimmed, '…')
+		trimmed = append(trimmed, runes[start:]...)
+		runes = trimmed
+		shift = start - 1
+		clipped = true
+	}
+	for i, ch := range runes {
 		if i >= maxCols {
 			break
 		}
 		st := base
-		if matchSet[i] {
+		if !(clipped && i == 0) && matchSet[i+shift] {
 			st = hitOnRow
 		}
 		a.screen.SetContent(startCol+i, ry, ch, nil, st)
