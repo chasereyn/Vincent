@@ -119,6 +119,13 @@ type Tab struct {
 	// operate on a diff tab without knowing it is one. See diffview.go.
 	DiffRows []diff.Row
 
+	// DiffOverlays are extra screen rows the app grows into a diff
+	// between its diff rows — the review composer and the markers under
+	// lines that already carry a note. Set fresh before each render; see
+	// diffoverlay.go for why they occupy real rows instead of being
+	// painted over the top.
+	DiffOverlays []DiffOverlay
+
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and
 	// keystroke routing; the tab owns the query, the resolved match

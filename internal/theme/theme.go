@@ -80,6 +80,24 @@ type Theme struct {
 	SynOperator tcell.Color
 	SynPunct    tcell.Color
 	SynConstant tcell.Color
+
+	// --- Review notes (phase 3) ---
+	// Appended at the END of the struct on purpose: a palette rewrite
+	// landing at the same time as this feature then merges cleanly
+	// instead of colliding in the middle of the type.
+	//
+	// ReviewBoxBG is the surface behind the inline composer and behind a
+	// saved note's marker row — a shade up from LineHL so the box reads as
+	// something sitting IN the diff rather than as another highlighted
+	// line of it. ReviewBorder draws its frame, ReviewText its content,
+	// and ReviewMarker the ▍ bar that leads a saved note. ReviewStale is
+	// what a note whose file has left the changeset fades to; it has to
+	// stay legible, because a stale note is still the reviewer's words.
+	ReviewBoxBG  tcell.Color
+	ReviewBorder tcell.Color
+	ReviewText   tcell.Color
+	ReviewMarker tcell.Color
+	ReviewStale  tcell.Color
 }
 
 // Default returns Vincent's palette. It is the only theme shipped —
@@ -167,5 +185,16 @@ func Default() Theme {
 		SynOperator: tcell.NewRGBColor(0x89, 0xdd, 0xff), // light cyan
 		SynPunct:    tcell.NewRGBColor(0xa9, 0xb1, 0xd6), // soft text
 		SynConstant: tcell.NewRGBColor(0xff, 0x9e, 0x64), // orange
+
+		// Review notes. Appended last, same reason as in the struct.
+		// ReviewBoxBG is deliberately lighter than LineHL (0x121216):
+		// the composer opens on top of a red or green diff row, and a
+		// surface that only just clears the active-line highlight
+		// disappears against a deletion tint.
+		ReviewBoxBG:  tcell.NewRGBColor(0x1c, 0x1d, 0x2b),
+		ReviewBorder: tcell.NewRGBColor(0x54, 0x59, 0x7a),
+		ReviewText:   tcell.NewRGBColor(0xc0, 0xca, 0xf5),
+		ReviewMarker: tcell.NewRGBColor(0xe0, 0xaf, 0x68),
+		ReviewStale:  tcell.NewRGBColor(0x56, 0x5f, 0x89),
 	}
 }
