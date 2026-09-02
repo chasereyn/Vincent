@@ -887,6 +887,71 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	a.contextOpen = true
 }
 
+// -----------------------------------------------------------------------------
+// Editor right-click context menu
+// -----------------------------------------------------------------------------
+
+// openEditorContext opens the right-click popup for the active text tab,
+// anchored near (x, y). It's the fallback home for the two actions the
+// phase-5 chrome pass demoted out of the ≡ menu — Toggle line comment and
+// Revert file — both mutating enough that a deliberate right-click on the
+// file itself is a better gate than a permanent row in the everything-menu.
+// Toggle line comment keeps its Esc-/ leader binding (leader.go, untouched
+// by this pass); Revert has no leader binding at all — this context menu
+// is now its only path, since the ≡ row is gone. Returns false, opening
+// nothing, when neither action applies to the active tab, so the caller
+// falls through to the main menu instead of popping an empty context menu.
+//
+// contextItem's action signature takes a *filetree.Node, inherited from
+// the tree's right-click menu above. These two actions operate on
+// a.activeTabPtr() directly and ignore the node entirely — it exists here
+// only so contextActivate's "run the action if the node is non-nil" gate
+// is satisfied.
+func (a *App) openEditorContext(x, y int) bool {
+	items := []contextItem{}
+	if a.hasCommentableTab() {
+		items = append(items, contextItem{
+			label:  "Toggle line comment",
+			action: func(app *App, _ *filetree.Node) { app.menuToggleLineComment() },
+		})
+	}
+	if a.hasRevert() {
+		items = append(items, contextItem{
+			label:  "Revert file",
+			action: func(app *App, _ *filetree.Node) { app.menuRevert() },
+		})
+	}
+	if len(items) == 0 {
+		return false
+	}
+
+	a.closeAllModals()
+	a.contextNode = &filetree.Node{}
+	a.contextItems = items
+	a.contextHover = 0
+	a.contextX, a.contextY = a.placeContext(x, y, len(items))
+	a.contextOpen = true
+	return true
+}
+
+// tryEditorContextClick opens the editor's right-click context menu when
+// (x, y) lands inside the editor body on a plain, mutable text tab — a
+// diff or image tab has nothing to comment or revert, and ReadOnly()
+// already gates both underlying actions, so checking it here means an
+// empty context menu never pops over a diff. Returns true when it
+// consumed the event, mirroring tryTreeContextClick.
+func (a *App) tryEditorContextClick(x, y int) bool {
+	ex, ey, ew, eh := a.editorRect()
+	if x < ex || x >= ex+ew || y < ey || y >= ey+eh {
+		return false
+	}
+	tab := a.activeTabPtr()
+	if tab == nil || tab.ReadOnly() {
+		return false
+	}
+	return a.openEditorContext(x, y)
+}
+
 // placeContext picks an on-screen origin for the context menu. Anchors on
 // the click point, but flips left or up when that would put part of the
 // popup off-screen.

@@ -59,6 +59,11 @@ func newTestApp(t *testing.T, root string) *App {
 		// test would assert against a panel that never drew.
 		gitPanelWidth: defaultGitPanelWidth,
 		gitPanelHover: -1,
+		// The real default (config.Defaults().TabBar) is false, but this
+		// fixture predates the toggle and most existing tab-bar tests
+		// assume the full strip renders — true here keeps them
+		// unchanged. Tests for the off state set it explicitly.
+		tabBarShown: true,
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.width, a.height = scr.Size()
@@ -1630,18 +1635,22 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 // spice-edit's when Vincent went read-only: New file / Rename file /
 // Delete file / Rename folder / Delete folder left the File actions
 // group, taking five rows with them. The Review group then arrived with
-// View diff and the changes-panel toggle.
+// View diff and the changes-panel toggle. The phase-5 tab-bar/menu-trim
+// pass dropped the count from 18 to 17: Revert file and Toggle line
+// comment moved to the editor's right-click context menu (see
+// openEditorContext), and the tab-bar toggle added one row back to the
+// View toggle group.
 func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	items, dividers, h := a.menuLayout()
 
-	if h != 29 {
-		t.Errorf("modalHeight = %d, want 29", h)
+	if h != 28 {
+		t.Errorf("modalHeight = %d, want 28", h)
 	}
-	if got := len(items); got != 18 {
-		t.Errorf("item count = %d, want 18 built-ins", got)
+	if got := len(items); got != 17 {
+		t.Errorf("item count = %d, want 17 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 16, 19, 24, 26}
+	wantDiv := []int{2, 6, 9, 12, 15, 18, 22, 25}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1652,8 +1661,11 @@ func TestMenuLayout_Baseline(t *testing.T) {
 	}
 }
 
-// TestMenuLayout_ToggleLineCommentRow ensures the comment action is present
-// and uses the same enablement predicate as the direct app method.
+// TestMenuLayout_ToggleLineCommentRow confirms "Toggle line comment" is no
+// longer a row in the ≡ menu — the phase-5 tab-bar/menu-trim pass demoted
+// it to the editor's right-click context menu alongside Revert file — and
+// that it's reachable there instead, gated by the same hasCommentableTab
+// predicate the old menu row used.
 func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "main.go")
@@ -1662,20 +1674,38 @@ func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
 	}
 	a := newTestApp(t, dir)
 
-	item := menuItemByLabel(t, a, "Toggle line comment")
-	if item.enabled(a) {
-		t.Fatal("comment row should be disabled without an active tab")
+	items, _, _ := a.menuLayout()
+	for _, it := range items {
+		if it.label == "Toggle line comment" {
+			t.Fatal("Toggle line comment should no longer be a ≡ menu row")
+		}
+	}
+
+	// No active tab: the editor context menu has nothing to offer.
+	if a.openEditorContext(0, 0) {
+		t.Fatal("openEditorContext should find nothing with no active tab")
 	}
 
 	a.openFile(target)
-	item = menuItemByLabel(t, a, "Toggle line comment")
-	if !item.enabled(a) {
-		t.Fatal("comment row should be enabled for a .go tab")
+	if !a.openEditorContext(0, 0) {
+		t.Fatal("openEditorContext should open for a commentable .go tab")
+	}
+	found := false
+	for _, it := range a.contextItems {
+		if it.label == "Toggle line comment" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Toggle line comment should be reachable from the editor context menu")
 	}
 }
 
 // TestMenuLayout_Shortcuts pins the right-side hint text shown in the action
 // menu to the Esc-leader bindings that are meant to be discoverable there.
+// Revert file and Toggle line comment are deliberately absent — the
+// phase-5 tab-bar/menu-trim pass moved both to the editor's right-click
+// context menu (see TestMenuLayout_ToggleLineCommentRow).
 func TestMenuLayout_Shortcuts(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	want := map[string]string{
@@ -1684,7 +1714,6 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		"Close tab":            "Esc w",
 		"Undo":                 "Esc u",
 		"Redo":                 "Esc r",
-		"Revert file":          "",
 		"Find in file":         "Esc f",
 		"Find file in project": "Esc p",
 		"Copy relative path":   "",
@@ -1692,9 +1721,11 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		"Copy selection":       "",
 		"Cut selection":        "",
 		"Paste":                "",
-		"Toggle line comment":  "Esc /",
 		"Hide file explorer":   "Esc t",
-		"Quit editor":          "Esc q",
+		// newTestApp's fixture defaults tabBarShown to true (see its doc
+		// comment), so the toggle row reads "Hide", not "Show".
+		"Hide tab bar": "Esc b",
+		"Quit editor":  "Esc q",
 	}
 
 	items, _, _ := a.menuLayout()
@@ -1998,4 +2029,133 @@ func TestDrawTabBar_NoIconWhenDisabled(t *testing.T) {
 			t.Fatalf("did not expect glyph %q at x=%d when icons off", string(wantGlyph), x)
 		}
 	}
+}
+
+// TestDrawTabBar_OffShowsNameNotStrip pins what row 0 looks like with
+// tabBarShown off: the active tab's name renders (so "what file am I
+// looking at" survives), but no second tab's name and no × close button
+// appear — there's no strip to click, only the ≡ button and the name.
+func TestDrawTabBar_OffShowsNameNotStrip(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"alpha.go", "zzz_other.go"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(dir, "alpha.go"))
+	a.openFile(filepath.Join(dir, "zzz_other.go"))
+	a.tabBarShown = false
+
+	a.drawTabBar()
+	a.screen.Show()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+	row := rowText(t, cells, w, 0)
+
+	if !strings.Contains(row, "zzz_other.go") {
+		t.Fatalf("expected active tab name on row 0, got %q", row)
+	}
+	if strings.Contains(row, "alpha.go") {
+		t.Fatalf("did not expect the inactive tab's name with the strip off: %q", row)
+	}
+	if strings.Contains(row, "×") {
+		t.Fatalf("did not expect a close button with the strip off: %q", row)
+	}
+
+	// No tab strip means no click targets to hit-test against.
+	if a.lastTabRects != nil {
+		t.Fatalf("lastTabRects = %v, want nil with the strip off", a.lastTabRects)
+	}
+}
+
+// TestDrawTabBar_OnShowsFullStrip is the mirror of the test above: with
+// tabBarShown on, every open tab's name renders in row 0 and lastTabRects
+// is populated so tabBarClick has real geometry to hit-test against.
+func TestDrawTabBar_OnShowsFullStrip(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"alpha.go", "zzz_other.go"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(dir, "alpha.go"))
+	a.openFile(filepath.Join(dir, "zzz_other.go"))
+	a.tabBarShown = true
+
+	a.drawTabBar()
+	a.screen.Show()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+	row := rowText(t, cells, w, 0)
+
+	if !strings.Contains(row, "alpha.go") || !strings.Contains(row, "zzz_other.go") {
+		t.Fatalf("expected both tab names on row 0 with the strip on, got %q", row)
+	}
+	if len(a.lastTabRects) != 2 {
+		t.Fatalf("lastTabRects = %d entries, want 2", len(a.lastTabRects))
+	}
+}
+
+// TestTabBarClick_OffOnlyOpensMenu pins the click contract with the strip
+// off: the ≡ button still opens the menu, but a click anywhere else on row
+// 0 — where a tab would have been — does nothing, since there's no strip
+// to switch or close.
+func TestTabBarClick_OffOnlyOpensMenu(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.tabBarShown = false
+	a.drawTabBar() // populate (empty) lastTabRects for the off state
+
+	sw := a.sidebarW()
+	a.tabBarClick(sw+menuButtonWidth+5, 0) // past the ≡ button, where a tab would sit
+	if a.menuOpen {
+		t.Fatal("click past the ≡ button should not open the menu with the strip off")
+	}
+	if a.activeTab != 0 {
+		t.Fatalf("click with no strip should not change activeTab, got %d", a.activeTab)
+	}
+}
+
+// TestMenuToggleTabBar_FlipsAndLabels pins the toggle action and its
+// dynamic menu label, mirroring TestMenuToggleSidebar-style coverage.
+func TestMenuToggleTabBar_FlipsAndLabels(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tabBarShown = false
+
+	if got := a.tabBarToggleLabel(); got != "Show tab bar" {
+		t.Fatalf("label = %q, want %q", got, "Show tab bar")
+	}
+	a.menuToggleTabBar()
+	if !a.tabBarShown {
+		t.Fatal("expected tabBarShown = true after toggle")
+	}
+	if got := a.tabBarToggleLabel(); got != "Hide tab bar" {
+		t.Fatalf("label = %q, want %q", got, "Hide tab bar")
+	}
+	a.menuToggleTabBar()
+	if a.tabBarShown {
+		t.Fatal("expected tabBarShown = false after second toggle")
+	}
+}
+
+// rowText reconstructs one screen row as a plain string, for substring
+// assertions against drawTabBar output. Distinct from filetree's own
+// rowText helper — this package has no equivalent yet.
+func rowText(t *testing.T, cells []tcell.SimCell, w, y int) string {
+	t.Helper()
+	rs := make([]rune, 0, w)
+	for x := 0; x < w; x++ {
+		c := cells[y*w+x]
+		if len(c.Runes) == 0 {
+			rs = append(rs, ' ')
+			continue
+		}
+		rs = append(rs, c.Runes[0])
+	}
+	return string(rs)
 }

@@ -479,6 +479,88 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 	}
 }
 
+// TestOpenEditorContext_NoActiveTabFindsNothing guards the "fall through to
+// the main menu instead of popping an empty context menu" contract: with
+// no active tab neither Toggle line comment nor Revert file applies.
+func TestOpenEditorContext_NoActiveTabFindsNothing(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	if a.openEditorContext(5, 5) {
+		t.Fatal("expected no context menu with no active tab")
+	}
+	if a.contextOpen {
+		t.Fatal("contextOpen should stay false")
+	}
+}
+
+// TestOpenEditorContext_CommentableThenRevertable pins the two rows the
+// phase-5 menu trim demoted here from the ≡ menu: a freshly opened file
+// offers only Toggle line comment (nothing to revert yet); after an edit,
+// Revert file joins it.
+func TestOpenEditorContext_CommentableThenRevertable(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := writeFile(target, "package main"); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	if !a.openEditorContext(5, 5) {
+		t.Fatal("expected a context menu for a commentable .go tab")
+	}
+	labels := func() []string {
+		out := make([]string, len(a.contextItems))
+		for i, it := range a.contextItems {
+			out[i] = it.label
+		}
+		return out
+	}
+	got := labels()
+	if len(got) != 1 || got[0] != "Toggle line comment" {
+		t.Fatalf("fresh file context = %v, want just [Toggle line comment]", got)
+	}
+
+	tab := a.activeTabPtr()
+	tab.InsertString("X")
+	if !a.openEditorContext(5, 5) {
+		t.Fatal("expected a context menu after an edit")
+	}
+	got = labels()
+	if len(got) != 2 || got[0] != "Toggle line comment" || got[1] != "Revert file" {
+		t.Fatalf("edited-file context = %v, want [Toggle line comment Revert file]", got)
+	}
+
+	// Running the Revert row's action actually reverts — proves the
+	// action closure reaches the real tab, not just a label.
+	a.contextHover = 1
+	a.contextActivate()
+	if got := tab.Buffer.String(); got != "package main" {
+		t.Fatalf("after Revert file context action = %q, want %q", got, "package main")
+	}
+}
+
+// TestTryEditorContextClick_ReadOnlyTabFindsNothing proves a diff tab (or
+// any read-only tab) never pops the editor's mutation context menu — there
+// is nothing on a diff to comment on or revert.
+func TestTryEditorContextClick_ReadOnlyTabFindsNothing(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := writeFile(target, "package main"); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.tabs[a.activeTab].Mode = "diff" // any non-empty Mode makes ReadOnly() true
+
+	ex, ey, _, _ := a.editorRect()
+	if a.tryEditorContextClick(ex+1, ey+1) {
+		t.Fatal("expected no context menu on a read-only tab")
+	}
+	if a.contextOpen {
+		t.Fatal("contextOpen should stay false for a read-only tab")
+	}
+}
+
 // TestPlaceContext_FlipsLeftAndUp tests that the popup flips when it would
 // otherwise overflow the window edges, and clamps at 0.
 func TestPlaceContext_FlipsLeftAndUp(t *testing.T) {
