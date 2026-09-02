@@ -187,11 +187,13 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Save & close tab", action: (*App).menuSaveAndClose, enabled: (*App).hasSavableTab},
 			{label: "Close tab", shortcut: "Esc w", action: (*App).menuClose, enabled: (*App).hasTab},
 		},
-		// History
+		// History. Revert file moved to the editor's right-click context
+		// menu (see openEditorContext) — it's destructive enough that a
+		// deliberate right-click on the file itself is a better gate than
+		// a row in the everything-menu.
 		{
 			{label: "Undo", shortcut: "Esc u", action: (*App).menuUndo, enabled: (*App).hasUndo},
 			{label: "Redo", shortcut: "Esc U", action: (*App).menuRedo, enabled: (*App).hasRedo},
-			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
 		},
 		// Review
 		{
@@ -208,17 +210,20 @@ func builtinMenuGroups() [][]menuItemDef {
 			{label: "Copy relative path", action: (*App).menuCopyRelativePath, enabled: (*App).hasFileTab},
 			{label: "Copy absolute path", action: (*App).menuCopyAbsolutePath, enabled: (*App).hasFileTab},
 		},
-		// Clipboard
+		// Clipboard. Toggle line comment moved to the editor's right-click
+		// context menu (see openEditorContext) — same reasoning as Revert
+		// file above: a mutation gets a deliberate right-click gate rather
+		// than a permanent row in the everything-menu.
 		{
 			{label: "Select all", shortcut: "Esc a", action: (*App).menuSelectAll, enabled: (*App).hasTab},
 			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
 			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
 			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
-			{label: "Toggle line comment", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
 		{
 			{shortcut: "Esc f", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
+			{shortcut: "Esc t", action: (*App).menuToggleTabBar, enabled: alwaysTrue, labelFor: (*App).tabBarToggleLabel},
 		},
 		// Quit
 		{
@@ -312,6 +317,13 @@ type App struct {
 	// sidebarShown controls whether the file explorer panel is visible.
 	// When false the editor and tab bar fill the whole window.
 	sidebarShown bool
+
+	// tabBarShown controls whether row 0 draws the full strip of open
+	// tabs or just the ≡ button and the active tab's name. The row
+	// itself never goes away — see tabBarRect/editorRect — only its
+	// contents change. Loaded from config.Config.TabBar (default off)
+	// by loadUserConfig; toggled by Esc-b / menuToggleTabBar.
+	tabBarShown bool
 
 	// sidebarWidth is the live width of the file-explorer block (file tree
 	// + 1-cell splitter on its right edge), in screen cells. The user can
@@ -613,6 +625,7 @@ func (a *App) loadUserConfig() {
 	if a.tree != nil {
 		a.tree.IconsEnabled = icons.Resolve(cfg.Icons)
 	}
+	a.tabBarShown = cfg.TabBar
 }
 
 // refreshTree calls tree.Refresh when the file tree exists, and is a
@@ -1322,6 +1335,13 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// File-tree row hover. Same reasoning as the Changes panel just below:
+	// updated on every mouse event, not just motion, since terminals emit
+	// no "pointer left the window" event to clear a stale highlight with.
+	if a.sidebarShown {
+		a.updateTreeHover(x, y)
+	}
+
 	// Changes-panel hover. Updated on every mouse event rather than only on
 	// motion, because terminals emit no "pointer left the window" event —
 	// tying it to motion alone leaves a row lit after the pointer moves to
@@ -1337,6 +1357,9 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	// Button3, which is why every action also lives in the main ≡ menu.
 	if btn&tcell.Button3 != 0 {
 		if a.tryTreeContextClick(x, y) {
+			return
+		}
+		if a.tryEditorContextClick(x, y) {
 			return
 		}
 		a.openMenu()
@@ -1493,6 +1516,23 @@ func (a *App) scrollAtH(x, y, delta int) {
 			t.ScrollH(delta)
 		}
 	}
+}
+
+// updateTreeHover keeps the file tree's row highlight in sync with the
+// mouse, mirroring updateGitPanelHover: recorded on every mouse event that
+// lands inside the tree's rectangle, cleared for one that doesn't. sw<=0
+// (sidebar hidden or too narrow) and any (x, y) outside sidebarRect both
+// route through the same ClearHover call.
+func (a *App) updateTreeHover(x, y int) {
+	if a.tree == nil {
+		return
+	}
+	sx, sy, sw, sh := a.sidebarRect()
+	if sw <= 0 || x < sx || x >= sx+sw || y < sy || y >= sy+sh {
+		a.tree.ClearHover()
+		return
+	}
+	a.tree.SetHover(y - sy)
 }
 
 // tryTreeContextClick opens the right-click context menu when (x, y) lands
@@ -2346,6 +2386,24 @@ func (a *App) sidebarToggleLabel() string {
 	return "Show file explorer"
 }
 
+// menuToggleTabBar shows or hides the tab strip in row 0. The row itself
+// always stays — see tabBarRect/editorRect — only its contents change: a
+// full strip of open tabs when on, just the ≡ button and the active tab's
+// name when off (see drawTabBar).
+func (a *App) menuToggleTabBar() {
+	a.closeMenu()
+	a.tabBarShown = !a.tabBarShown
+}
+
+// tabBarToggleLabel returns the label the toggle row should display given
+// the current tab-bar state. Drawn dynamically by drawMenu.
+func (a *App) tabBarToggleLabel() string {
+	if a.tabBarShown {
+		return "Hide tab bar"
+	}
+	return "Show tab bar"
+}
+
 // menuQuit exits the editor. When any tab has unsaved changes, opens the
 // dirty-close modal so the user can pick Save (save all then quit),
 // Discard (quit anyway), or Cancel. With no dirty tabs we exit straight
@@ -2506,8 +2564,12 @@ func (a *App) layoutTabs() []tabRect {
 	return out
 }
 
-// drawTabBar paints the tab bar across the top of the editor area: first
-// the menu button (≡), then any open tabs.
+// drawTabBar paints row 0 across the top of the editor area: first the menu
+// button (≡), then either the full tab strip (tabBarShown) or just the
+// active tab's name (see drawActiveTabName) when the strip is toggled off.
+// The row itself is never skipped — see tabBarRect/editorRect — only its
+// contents change, so the leader-armed hint and the ≡ button always have
+// the same home regardless of the toggle.
 func (a *App) drawTabBar() {
 	tx, ty, tw, _ := a.tabBarRect()
 	barStyle := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Muted)
@@ -2516,6 +2578,14 @@ func (a *App) drawTabBar() {
 	}
 
 	a.drawMenuButton()
+
+	if !a.tabBarShown {
+		// No tab strip to hit-test against — clearing lastTabRects means a
+		// stale click target from before the toggle can't fire.
+		a.lastTabRects = nil
+		a.drawActiveTabName(tx, ty, tw)
+		return
+	}
 
 	rects := a.layoutTabs()
 	a.lastTabRects = rects
@@ -2586,6 +2656,30 @@ func (a *App) drawTabBar() {
 			}
 			a.screen.SetContent(col, ty, '×', nil, closeStyle)
 		}
+	}
+}
+
+// drawActiveTabName paints the active tab's dirty dot (if any) and display
+// name directly in row 0, right after the ≡ button. This is what row 0
+// shows when tabBarShown is off: "what file am I looking at" survives the
+// tab strip disappearing, without the row itself going away.
+func (a *App) drawActiveTabName(tx, ty, tw int) {
+	tab := a.activeTabPtr()
+	if tab == nil {
+		return
+	}
+	style := tcell.StyleDefault.Background(a.theme.SidebarBG).Foreground(a.theme.Muted)
+	col := tx + menuButtonWidth + 1
+	if tab.Dirty {
+		a.screen.SetContent(col, ty, '●', nil, style.Foreground(a.theme.Modified))
+	}
+	col += 2 // skip dirty slot, dirty or not — matches layoutTabs' spacing.
+	for _, ru := range tab.DisplayName() {
+		if col >= tx+tw {
+			break
+		}
+		a.screen.SetContent(col, ty, ru, nil, style)
+		col++
 	}
 }
 

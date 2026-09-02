@@ -22,6 +22,37 @@ func TestDefaults(t *testing.T) {
 	if got.Icons != IconsAuto {
 		t.Fatalf("Defaults().Icons = %q, want %q", got.Icons, IconsAuto)
 	}
+	if got.TabBar != false {
+		t.Fatalf("Defaults().TabBar = %v, want false", got.TabBar)
+	}
+}
+
+// TestLoadTabBar pins the boolean tabBar key: present-and-true turns the
+// strip on, omitted (or present-and-false) leaves the documented default
+// of off.
+func TestLoadTabBar(t *testing.T) {
+	cases := map[string]bool{
+		`{}`:               false,
+		`{"tabBar":false}`: false,
+		`{"tabBar":true}`:  true,
+		`{"icons":"on"}`:   false, // unrelated key present, tabBar still defaults off
+	}
+	for body, want := range cases {
+		t.Run(body, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			cfg, err := Load(p)
+			if err != nil {
+				t.Fatalf("Load(%s): %v", body, err)
+			}
+			if cfg.TabBar != want {
+				t.Fatalf("Load(%s).TabBar = %v, want %v", body, cfg.TabBar, want)
+			}
+		})
+	}
 }
 
 // TestLoadEmptyPath verifies that calling Load with no path resolves

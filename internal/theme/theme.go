@@ -8,8 +8,9 @@
 // Package theme defines the editor's curated color palette. The editor
 // intentionally ships one opinionated dark theme — there is no runtime
 // configuration, no theme file, no JSON. To restyle the editor, edit this
-// file and recompile. The palette is inspired by Tokyo Night and tuned so
-// the syntax colors stay legible against the chrome.
+// file and recompile. The palette is Zed's Ayu Darker extension, tuned to
+// the way Chase actually runs it (see Default's doc comment for the exact
+// sources), and the syntax colors stay legible against that chrome.
 package theme
 
 import "github.com/gdamore/tcell/v2"
@@ -19,9 +20,9 @@ import "github.com/gdamore/tcell/v2"
 // element of the palette can be balanced against the others.
 type Theme struct {
 	// --- Surfaces ---
-	BG        tcell.Color // Editor background. Pure black.
-	SidebarBG tcell.Color // File tree / inactive tab background. Also pure black — see Default.
-	StatusBG  tcell.Color // Status bar background. Also pure black.
+	BG        tcell.Color // Editor background. See Default's doc comment.
+	SidebarBG tcell.Color // File tree / inactive tab background. Same ground as BG.
+	StatusBG  tcell.Color // Status bar background. Same ground as BG.
 	StatusFG  tcell.Color // Status bar text, drawn on StatusBG.
 	LineHL    tcell.Color // Active line highlight.
 
@@ -87,93 +88,135 @@ type Theme struct {
 	// and a slightly different amber dot are the same dot, and this state
 	// is the one that can lose an agent's work. Red reads as "stop".
 	Conflict tcell.Color
+	// --- New in the phase-5 chrome pass. Appended, never inserted, so a
+	// sibling agent appending its own fields to this struct at the same
+	// time merges cleanly. ---
+
+	// LineNumber is the gutter color for a line that is NOT the cursor's
+	// line (AccentSoft above covers the cursor's own row). Split out from
+	// Muted deliberately: Muted's other consumers (tree rows, inactive
+	// tabs, secondary UI text) read at a brighter value than a gutter of
+	// numbers should — a column of eleven Muted digits down the left edge
+	// competes with the code next to it. internal/editor/tab.go and
+	// internal/editor/diffview.go both read this instead of Muted for the
+	// non-cursor gutter style.
+	LineNumber tcell.Color
+
+	// RowHover / RowSelected are full-width row background fills for list
+	// UIs (today: the file tree). RowHover is deliberately subtle — it
+	// says "this is clickable", not "this is selected" (see the Changes
+	// panel's own hover, which historically reused LineHL for the same
+	// job before this pass gave the tree a dedicated pair). RowSelected is
+	// the stronger fill for the active/selected row; the row's git-status
+	// or active foreground colour still wins on top of it.
+	RowHover    tcell.Color
+	RowSelected tcell.Color
+
+	// SynProperty covers struct fields, object properties, HTML/JSX
+	// attributes, and tag names — chroma.NameProperty / NameAttribute /
+	// NameTag. It didn't have its own field before this pass; those token
+	// types fell back to SynType or SynVariable depending on the lexer.
+	SynProperty tcell.Color
 }
 
 // Default returns Vincent's palette. It is the only theme shipped —
 // calling code can tweak fields on the returned value if it really needs
 // to, but there is no theme-loading machinery on purpose.
 //
-// Every surface is pure black, deliberately. spice-edit shipped a Tokyo
-// Night charcoal (0x1a1b26) with a slightly darker sidebar, which is the
-// conventional choice; Vincent instead paints black and lets the splitter
-// and borders carry the panel separation. Two consequences worth knowing
-// before you "fix" this:
+// The ground is #030405, not pure black. That's deliberate: it matches
+// Chase's actual Ghostty background, and every other value in this
+// palette was picked (or, for the handful pulled from a spec, verified)
+// against that ground rather than against #000000 — a terminal cell has
+// no alpha, so a color tuned for a literal-black background can read
+// slightly wrong once it's sitting on #030405 instead. The palette itself
+// is Zed's Ayu Darker theme extension plus the overrides Chase actually
+// runs, read on 2026-09-02 from:
+//
+//   - ~/Library/Application Support/Zed/extensions/installed/ayu-darker/themes/ayu-darker.json
+//   - ~/.config/zed/settings.json
+//
+// Two consequences worth knowing before you "fix" this:
 //
 //   - BG and SidebarBG are intentionally identical. The invariant that
 //     replaced "these must differ" is "Subtle must contrast with BG" —
 //     the splitter is now the only thing dividing the panes, so if it
 //     stops being visible the layout genuinely breaks.
-//   - Black is set explicitly rather than via tcell.ColorDefault, which
-//     would inherit whatever the host terminal is using and would not
-//     reliably be black.
+//   - The ground is set explicitly via tcell.NewRGBColor rather than
+//     tcell.ColorDefault, which would inherit whatever the host terminal
+//     is using and would not reliably match Ghostty's #030405.
 func Default() Theme {
 	return Theme{
-		// Surfaces — all pure black. See the note above.
-		BG:        tcell.NewRGBColor(0x00, 0x00, 0x00),
-		SidebarBG: tcell.NewRGBColor(0x00, 0x00, 0x00),
-		StatusBG:  tcell.NewRGBColor(0x00, 0x00, 0x00),
-		// Raised just enough to read as a highlight against black without
-		// becoming a grey slab.
-		LineHL: tcell.NewRGBColor(0x12, 0x12, 0x16),
+		// Surfaces — Ghostty's ground. See the note above.
+		BG:        tcell.NewRGBColor(0x03, 0x04, 0x05),
+		SidebarBG: tcell.NewRGBColor(0x03, 0x04, 0x05),
+		StatusBG:  tcell.NewRGBColor(0x03, 0x04, 0x05),
+		// The active line's background, from Chase's Zed settings.
+		LineHL: tcell.NewRGBColor(0x18, 0x1a, 0x1e),
 
 		// Foregrounds & accents.
-		Text:  tcell.NewRGBColor(0xc0, 0xca, 0xf5),
-		Muted: tcell.NewRGBColor(0x56, 0x5f, 0x89),
-		// Lifted from spice-edit's 0x32344a: borders and the splitter now
-		// sit on black rather than on charcoal, and at the old value they
-		// were close to invisible.
-		Subtle: tcell.NewRGBColor(0x3a, 0x3d, 0x55),
+		Text:   tcell.NewRGBColor(0xdf, 0xde, 0xda),
+		Muted:  tcell.NewRGBColor(0xc3, 0xc2, 0xbe),
+		Subtle: tcell.NewRGBColor(0x2d, 0x2f, 0x34),
 		// StatusFG replaces the old inverted status bar. spice-edit drew
-		// theme.BG on a solid blue StatusBG; with a black StatusBG that
-		// would be black-on-black, so the bar now draws accent text on
-		// black instead of a coloured slab.
-		StatusFG:    tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
-		Accent:      tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
-		AccentSoft:  tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
-		Selection:   tcell.NewRGBColor(0x33, 0x46, 0x7c),
-		Modified:    tcell.NewRGBColor(0xe0, 0xaf, 0x68),
-		Error:       tcell.NewRGBColor(0xf7, 0x76, 0x8e),
-		GitModified: tcell.NewRGBColor(0xff, 0x9e, 0x64),
-		GitAdded:    tcell.NewRGBColor(0x9e, 0xce, 0x6a),
-		GitDeleted:  tcell.NewRGBColor(0xf7, 0x76, 0x8e),
-		GitRenamed:  tcell.NewRGBColor(0x7d, 0xcf, 0xf7),
-		GitMixed:    tcell.NewRGBColor(0xbb, 0x9a, 0xf7),
+		// theme.BG on a solid blue StatusBG; with a near-black StatusBG
+		// that would be nearly black-on-black, so the bar draws accent
+		// text on the ground instead of a coloured slab.
+		StatusFG:    tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		Accent:      tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		AccentSoft:  tcell.NewRGBColor(0xdf, 0xde, 0xda),
+		Selection:   tcell.NewRGBColor(0x18, 0x31, 0x41),
+		Modified:    tcell.NewRGBColor(0xfe, 0xb4, 0x54),
+		Error:       tcell.NewRGBColor(0xef, 0x71, 0x77),
+		GitModified: tcell.NewRGBColor(0xfe, 0xb4, 0x54),
+		GitAdded:    tcell.NewRGBColor(0xaa, 0xd8, 0x4c),
+		GitDeleted:  tcell.NewRGBColor(0xef, 0x71, 0x77),
+		GitRenamed:  tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		GitMixed:    tcell.NewRGBColor(0xfe, 0xb4, 0x54),
 
-		// Diff. These are VS Code's dark diff-editor tints, by way of
-		// herdr-sidebar — the look Vincent was asked to match. They are
-		// deliberately NOT derived from GitAdded / GitDeleted above:
-		// those are foreground colours picked to be legible on black,
-		// and using them as row backgrounds would drown the code.
-		DiffAddBG:     tcell.NewRGBColor(0x20, 0x39, 0x28),
-		DiffAddWordBG: tcell.NewRGBColor(0x35, 0x59, 0x3d),
-		DiffAddMark:   tcell.NewRGBColor(0x8c, 0xc9, 0x8f),
-		DiffDelBG:     tcell.NewRGBColor(0x42, 0x22, 0x26),
-		DiffDelWordBG: tcell.NewRGBColor(0x6f, 0x30, 0x36),
-		DiffDelMark:   tcell.NewRGBColor(0xd1, 0x6d, 0x76),
+		// Diff. Ayu Darker's add/del tints, blended over #030405 rather
+		// than eyeballed against pure black.
+		DiffAddBG:     tcell.NewRGBColor(0x1e, 0x26, 0x10),
+		DiffAddWordBG: tcell.NewRGBColor(0x35, 0x44, 0x1a),
+		DiffAddMark:   tcell.NewRGBColor(0xaa, 0xd8, 0x4c),
+		DiffDelBG:     tcell.NewRGBColor(0x29, 0x15, 0x17),
+		DiffDelWordBG: tcell.NewRGBColor(0x4a, 0x25, 0x27),
+		DiffDelMark:   tcell.NewRGBColor(0xef, 0x71, 0x77),
 
 		// Find. FindMatch is a desaturated amber so it reads as "all
 		// hits" without competing with the syntax palette. FindCurrent
 		// is full amber — the same shade the dirty indicator uses —
 		// so the active match jumps off the page.
 		FindMatch:   tcell.NewRGBColor(0x6f, 0x52, 0x1f),
-		FindCurrent: tcell.NewRGBColor(0xe0, 0xaf, 0x68),
+		FindCurrent: tcell.NewRGBColor(0xfe, 0xb4, 0x54),
 
-		// Tree.
-		FolderColor: tcell.NewRGBColor(0x7a, 0xa2, 0xf7),
-		FileColor:   tcell.NewRGBColor(0xa9, 0xb1, 0xd6),
+		// Tree. FileColor deliberately matches Text rather than Muted — a
+		// plain file name is primary content, not secondary UI chrome, and
+		// it has to stay visually distinct from Muted (dotfiles, line
+		// numbers) or the dotfile-dimming cue disappears.
+		FolderColor: tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		FileColor:   tcell.NewRGBColor(0xdf, 0xde, 0xda),
 
-		// Syntax — Tokyo Night-ish.
-		SynKeyword:  tcell.NewRGBColor(0xbb, 0x9a, 0xf7), // purple
-		SynString:   tcell.NewRGBColor(0x9e, 0xce, 0x6a), // green
-		SynNumber:   tcell.NewRGBColor(0xff, 0x9e, 0x64), // orange
-		SynComment:  tcell.NewRGBColor(0x56, 0x5f, 0x89), // muted slate
-		SynFunction: tcell.NewRGBColor(0x7a, 0xa2, 0xf7), // blue
-		SynType:     tcell.NewRGBColor(0x2a, 0xc3, 0xde), // cyan
-		SynBuiltin:  tcell.NewRGBColor(0xf7, 0x76, 0x8e), // red
-		SynVariable: tcell.NewRGBColor(0xc0, 0xca, 0xf5), // text-like
-		SynOperator: tcell.NewRGBColor(0x89, 0xdd, 0xff), // light cyan
-		SynPunct:    tcell.NewRGBColor(0xa9, 0xb1, 0xd6), // soft text
-		SynConstant: tcell.NewRGBColor(0xff, 0x9e, 0x64), // orange
+		// Syntax — Ayu Darker.
+		SynKeyword:  tcell.NewRGBColor(0xff, 0x77, 0x33), // orange
+		SynString:   tcell.NewRGBColor(0xa9, 0xd9, 0x4b), // green
+		SynNumber:   tcell.NewRGBColor(0xd2, 0xa6, 0xff), // purple (shared with boolean, see SynBuiltin)
+		SynComment:  tcell.NewRGBColor(0x5c, 0x67, 0x73), // slate
+		SynFunction: tcell.NewRGBColor(0xff, 0xb4, 0x54), // amber
+		SynType:     tcell.NewRGBColor(0x59, 0xb4, 0xc2), // cyan
+		// SynBuiltin doubles as "boolean" — chroma tags true/false/nil as
+		// NameBuiltinPseudo, and the source spec gives number and boolean
+		// literals the same purple, so this and SynNumber share a value.
+		SynBuiltin:  tcell.NewRGBColor(0xd2, 0xa6, 0xff), // purple
+		SynVariable: tcell.NewRGBColor(0xdf, 0xde, 0xda), // text-like
+		SynOperator: tcell.NewRGBColor(0xfe, 0x8f, 0x40), // orange
+		SynPunct:    tcell.NewRGBColor(0xa6, 0xa5, 0xa0), // soft text
+		SynConstant: tcell.NewRGBColor(0xff, 0xee, 0x99), // yellow
+
+		// Phase-5 additions — see the field doc comments.
+		LineNumber:  tcell.NewRGBColor(0x45, 0x45, 0x43),
+		RowHover:    tcell.NewRGBColor(0x2d, 0x2f, 0x34),
+		RowSelected: tcell.NewRGBColor(0x3e, 0x40, 0x43),
+		SynProperty: tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
 
 		// Conflict — see the field comment.
 		Conflict: tcell.NewRGBColor(0xef, 0x71, 0x77),

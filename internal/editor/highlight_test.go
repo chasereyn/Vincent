@@ -227,3 +227,49 @@ func TestHighlightVisible_LeadRecoversCommentState(t *testing.T) {
 		}
 	}
 }
+
+// TestHighlight_TypeNameVsPlainVariableDiffer pins the styleForPlainIdent
+// heuristic: a declared type name and an ordinary lowercase variable both
+// fall through chroma's Go lexer to the unclassified NameOther token (chroma
+// is a regex lexer, not a parser — it has no notion of "this was declared
+// as a type"), and before this fix both rendered in the same flat base
+// color. They must now diverge by capitalization: SynType vs SynVariable.
+func TestHighlight_TypeNameVsPlainVariableDiffer(t *testing.T) {
+	src := "package main\n\nfunc run(cfg Config) {\n\tresult := cfg.Name\n\t_ = result\n}\n"
+	th := theme.Default()
+
+	got := Highlight("main.go", src, th)
+	lines := strings.Split(src, "\n")
+
+	typeStyle := tcell.StyleDefault.Background(th.BG).Foreground(th.SynType)
+	varStyle := tcell.StyleDefault.Background(th.BG).Foreground(th.SynVariable)
+
+	findRune := func(row int, needle rune) tcell.Style {
+		t.Helper()
+		for i, r := range []rune(lines[row]) {
+			if r == needle {
+				return got[row][i]
+			}
+		}
+		t.Fatalf("could not find %q on line %d (%q)", needle, row, lines[row])
+		return tcell.Style{}
+	}
+
+	// Line 3 is "\tresult := cfg.Name" — "result" is a lowercase local
+	// variable bound by :=.
+	resultStyle := findRune(3, 'r')
+	if resultStyle != varStyle {
+		t.Errorf("lowercase variable %q: got %v, want SynVariable %v", "result", resultStyle, varStyle)
+	}
+
+	// Line 2 is "func run(cfg Config) {" — "Config" is a declared,
+	// capitalized type name used as a parameter type.
+	configStyle := findRune(2, 'C')
+	if configStyle != typeStyle {
+		t.Errorf("type name %q: got %v, want SynType %v", "Config", configStyle, typeStyle)
+	}
+
+	if resultStyle == configStyle {
+		t.Error("type name and lowercase variable must not share a style")
+	}
+}

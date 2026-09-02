@@ -242,7 +242,7 @@ func (t *Tab) renderDiff(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			continue
 		}
 
-		numFG := th.Muted
+		numFG := th.LineNumber
 		if onCursor {
 			numFG = th.AccentSoft
 		}

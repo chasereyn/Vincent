@@ -9,6 +9,7 @@ package editor
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -111,7 +112,7 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 
 	line, col := 0, 0
 	for tok := iter(); tok != chroma.EOF; tok = iter() {
-		st := styleForToken(tok.Type, t, base)
+		st := styleForToken(tok.Type, tok.Value, t, base)
 		for _, r := range tok.Value {
 			if r == '\n' {
 				line++
@@ -144,7 +145,12 @@ func baseStyleGrid(lines []string, base tcell.Style) [][]tcell.Style {
 // styleForToken maps a Chroma token type to a tcell.Style using the active
 // theme. We match by category first (Keyword, LiteralString, etc.) so the
 // mapping stays tight across the dozens of language-specific subtypes.
-func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.Style {
+//
+// value is the token's source text — needed only for the Name category's
+// catch-all case, where chroma's regex lexer has no semantic model of
+// "this identifier was declared as a type" and styleForPlainIdent falls
+// back to a capitalization heuristic instead.
+func styleForToken(tt chroma.TokenType, value string, t theme.Theme, base tcell.Style) tcell.Style {
 	switch tt.Category() {
 	case chroma.Keyword:
 		return base.Foreground(t.SynKeyword)
@@ -174,12 +180,31 @@ func styleForToken(tt chroma.TokenType, t theme.Theme, base tcell.Style) tcell.S
 			chroma.NameVariableClass, chroma.NameVariableGlobal,
 			chroma.NameVariableAnonymous:
 			return base.Foreground(t.SynVariable)
-		case chroma.NameTag:
-			return base.Foreground(t.SynType)
-		case chroma.NameAttribute:
-			return base.Foreground(t.SynVariable)
+		case chroma.NameTag, chroma.NameAttribute, chroma.NameProperty:
+			return base.Foreground(t.SynProperty)
+		case chroma.NameOther, chroma.Name:
+			return styleForPlainIdent(value, t, base)
 		}
-		return base
+		// Any other Name subtype chroma might add: same heuristic rather
+		// than the old flat base — see styleForPlainIdent.
+		return styleForPlainIdent(value, t, base)
 	}
 	return base
+}
+
+// styleForPlainIdent colors a Name-category token chroma didn't classify
+// any more specifically than "an identifier" — a declared type name, a
+// struct field, a package qualifier like fmt in fmt.Println, or a plain
+// local variable. Chroma is a single-pass regex lexer, not a parser, so it
+// has no notion of "this name was declared as a type"; this is a
+// heuristic standing in for that, using the Go/Rust/TypeScript convention
+// that exported and type identifiers start uppercase. It won't be exactly
+// right — a capitalized package-level const reads as a type too — but it
+// beats every plain identifier rendering in flat, uncolored text.
+func styleForPlainIdent(value string, t theme.Theme, base tcell.Style) tcell.Style {
+	runes := []rune(value)
+	if len(runes) > 0 && unicode.IsUpper(runes[0]) {
+		return base.Foreground(t.SynType)
+	}
+	return base.Foreground(t.SynVariable)
 }

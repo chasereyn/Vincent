@@ -55,6 +55,7 @@ func leaderBindings() []leaderBinding {
 		{'d', (*App).menuViewDiff},
 		{'g', (*App).menuToggleGitPanel},
 		{'m', (*App).openMenu},
+		{'t', (*App).menuToggleTabBar},
 	}
 }
 

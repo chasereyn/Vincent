@@ -11,13 +11,16 @@
 // is editor preferences. Keeping them apart means a malformed actions
 // file can't break editor settings and vice-versa.
 //
-// Schema today is intentionally tiny — one key — but the loader is
+// Schema today is intentionally tiny — two keys — but the loader is
 // already wrapped in a struct so we can grow new top-level fields
 // without breaking older configs:
 //
 //	{"icons": "auto"}    // default; auto-detect Nerd Fonts on startup
 //	{"icons": "on"}      // force-on, even if detection would say no
 //	{"icons": "off"}     // force-off, even if a Nerd Font is installed
+//	{"tabBar": true}     // show the full tab strip; default is false —
+//	                     // row 0 shows only the ≡ button and the active
+//	                     // tab's name until toggled on (Esc-b)
 //
 // The loader is best-effort the same way customactions is: missing
 // file → defaults, malformed file → error returned for the app to
@@ -49,20 +52,26 @@ const (
 // any field the file omitted, so consumers never need to nil-check.
 type Config struct {
 	Icons IconsMode
+	// TabBar shows or hides the tab strip in row 0. Default false: with
+	// one tab open (the common case for a review session) a full strip
+	// is a wasted row, so row 0 shows just the ≡ button and the active
+	// tab's name until the user turns it on (Esc-b, or the ≡ menu).
+	TabBar bool
 }
 
 // Defaults returns a Config populated with the values used when no
 // config file is present (or every field in it is blank). Centralised
 // so tests and the loader can't drift from each other.
 func Defaults() Config {
-	return Config{Icons: IconsAuto}
+	return Config{Icons: IconsAuto, TabBar: false}
 }
 
 // fileFormat mirrors the on-disk JSON shape. We decode into this and
 // then promote into Config so the public type doesn't have to carry
 // JSON tags or pointer fields just for "field was absent" detection.
 type fileFormat struct {
-	Icons string `json:"icons,omitempty"`
+	Icons  string `json:"icons,omitempty"`
+	TabBar bool   `json:"tabBar,omitempty"`
 }
 
 // DefaultPath returns the canonical config-file location:
@@ -129,5 +138,6 @@ func Load(path string) (Config, error) {
 			path, IconsAuto, IconsOn, IconsOff, ff.Icons,
 		)
 	}
+	cfg.TabBar = ff.TabBar
 	return cfg, nil
 }

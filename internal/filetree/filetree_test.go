@@ -431,7 +431,7 @@ func rowText(cells []tcell.SimCell, w, y int) string {
 
 // TestRender_ProjectNameAndChevrons asserts that the explorer header shows
 // the project (root) name on row 1 and that an expanded directory renders
-// with a '▾' while a collapsed sibling renders with a '▸'.
+// with a '⌄' while a collapsed sibling renders with a '›'.
 func TestRender_ProjectNameAndChevrons(t *testing.T) {
 	root := mkTree(t)
 	tr, err := New(root)
@@ -451,13 +451,13 @@ func TestRender_ProjectNameAndChevrons(t *testing.T) {
 		t.Fatalf("row 1 missing project name %q: got %q", rootName, got)
 	}
 
-	// Find the row containing alpha; verify '▾' present.
-	if !findRowWithBoth(cells, w, 20, "alpha", '▾') {
-		t.Fatal("expected an expanded-row showing alpha with '▾'")
+	// Find the row containing alpha; verify '⌄' present.
+	if !findRowWithBoth(cells, w, 20, "alpha", '⌄') {
+		t.Fatal("expected an expanded-row showing alpha with '⌄'")
 	}
-	// Beta is collapsed — verify '▸' present.
-	if !findRowWithBoth(cells, w, 20, "Beta", '▸') {
-		t.Fatal("expected a collapsed-row showing Beta with '▸'")
+	// Beta is collapsed — verify '›' present.
+	if !findRowWithBoth(cells, w, 20, "Beta", '›') {
+		t.Fatal("expected a collapsed-row showing Beta with '›'")
 	}
 }
 
@@ -641,6 +641,130 @@ func TestRender_DirtyAndActiveStaysBold(t *testing.T) {
 	}
 	if !rowHasBold(cells, w, rowY) {
 		t.Error("expected alpha row to remain bold")
+	}
+}
+
+// TestRender_IndentGuideAtDepth builds a two-level tree (root/parent/child)
+// and checks that the child's row — depth 1 — carries a '│' indent-guide
+// glyph in theme.Subtle at the cell the first indent unit occupies, while
+// the parent's own row — depth 0 — has no guide glyph there (its cell in
+// that column is the chevron instead). Pins CLAUDE.md's "files at depth 0
+// unchanged" requirement alongside the new guide.
+func TestRender_IndentGuideAtDepth(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "parent"))
+	mustWrite(t, filepath.Join(root, "parent", "child.txt"), "c")
+
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	parent := findChild(tr.Root, "parent")
+	tr.Toggle(parent) // expand so child.txt is visible at depth 1
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+
+	// listTop is y+2 (header + root name rows); parent is flat row 0,
+	// child.txt is flat row 1 — see flattenInto's pre-order walk.
+	parentRow := 2
+	childRow := 3
+
+	// Column 0 is the leading space every row gets; column 1 is where the
+	// child's single indent-guide unit lives (col 0 = " ", col 1-2 = "│ ").
+	guideCell := cells[childRow*w+1]
+	if len(guideCell.Runes) == 0 || guideCell.Runes[0] != '│' {
+		t.Fatalf("expected '│' indent guide at child row col 1, got %v", guideCell.Runes)
+	}
+	fg, _, _ := guideCell.Style.Decompose()
+	if fg != theme.Default().Subtle {
+		t.Errorf("indent guide colour = %v, want theme.Subtle %v", fg, theme.Default().Subtle)
+	}
+
+	// The parent's own row (depth 0) has no indent unit at all: column 1
+	// is its chevron, not a guide line.
+	parentCell := cells[parentRow*w+1]
+	if len(parentCell.Runes) > 0 && parentCell.Runes[0] == '│' {
+		t.Fatal("depth-0 row should not carry an indent guide")
+	}
+}
+
+// TestRender_SelectedRowFullWidthBackground checks that the active file's
+// row is filled with theme.RowSelected across every cell in the row's
+// width, not just behind the filename text — the git-status/active
+// foreground colour still has to win on top of it (checked separately by
+// the existing Bold/DirtyColour tests).
+func TestRender_SelectedRowFullWidthBackground(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	target := findChild(tr.Root, "zeta.txt")
+	tr.ActiveFile = target.Path
+
+	w := 40
+	cells, gotW := renderAndCollect(t, tr, w, 20)
+	rowY := findRowY(cells, gotW, 20, "zeta.txt")
+	if rowY < 0 {
+		t.Fatal("could not find zeta.txt row")
+	}
+	want := theme.Default().RowSelected
+	for x := 0; x < gotW; x++ {
+		_, bg, _ := cells[rowY*gotW+x].Style.Decompose()
+		if bg != want {
+			t.Fatalf("selected row col %d background = %v, want RowSelected %v", x, bg, want)
+		}
+	}
+}
+
+// TestRender_HoverRowFullWidthBackground drives SetHover directly (mirroring
+// how the app will call it from mouse motion) and checks the hovered row's
+// background fills theme.RowHover across its full width, while an
+// unrelated row stays on the plain sidebar ground. ClearHover is checked
+// too, since it's the half of the pattern gitpanel.go depends on for
+// terminals that emit no "pointer left" event.
+func TestRender_HoverRowFullWidthBackground(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// alpha is the first child row: local Y 2 (0 = header, 1 = root name).
+	tr.SetHover(2)
+
+	w := 40
+	cells, gotW := renderAndCollect(t, tr, w, 20)
+	hoverWant := theme.Default().RowHover
+	hoverRow := 2 // listTop(2) + flat row 0
+	for x := 0; x < gotW; x++ {
+		_, bg, _ := cells[hoverRow*gotW+x].Style.Decompose()
+		if bg != hoverWant {
+			t.Fatalf("hovered row col %d background = %v, want RowHover %v", x, bg, hoverWant)
+		}
+	}
+	// A different row must not pick up the hover fill.
+	otherRow := 3
+	sidebarBG := theme.Default().SidebarBG
+	for x := 0; x < gotW; x++ {
+		_, bg, _ := cells[otherRow*gotW+x].Style.Decompose()
+		if bg == hoverWant {
+			t.Fatalf("non-hovered row col %d unexpectedly carries RowHover", x)
+		}
+		if bg != sidebarBG {
+			t.Fatalf("non-hovered row col %d background = %v, want SidebarBG %v", x, bg, sidebarBG)
+		}
+	}
+
+	tr.ClearHover()
+	if tr.HoverY != -1 {
+		t.Fatalf("ClearHover left HoverY = %d, want -1", tr.HoverY)
+	}
+	cells, gotW = renderAndCollect(t, tr, w, 20)
+	for x := 0; x < gotW; x++ {
+		_, bg, _ := cells[hoverRow*gotW+x].Style.Decompose()
+		if bg == hoverWant {
+			t.Fatal("expected hover fill gone after ClearHover")
+		}
 	}
 }
 
