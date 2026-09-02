@@ -2163,7 +2163,7 @@ func conflictFixture(t *testing.T, newContent string) (*App, string) {
 func TestReconcile_DirtyTabWithDifferentBytesConflicts(t *testing.T) {
 	a, target := conflictFixture(t, "from the agent\n")
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 
 	tab := a.tabs[0]
 	if !tab.Conflict {
@@ -2191,11 +2191,11 @@ func TestReconcile_DirtyTabWithDifferentBytesConflicts(t *testing.T) {
 func TestReconcile_ConflictDoesNotReFlashOrAdvanceMtime(t *testing.T) {
 	a, _ := conflictFixture(t, "from the agent\n")
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 	firstMtime := a.tabs[0].Mtime
 	a.statusMsg = ""
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 
 	if a.statusMsg != "" {
 		t.Fatalf("a standing conflict should not re-flash; got %q", a.statusMsg)
@@ -2216,7 +2216,7 @@ func TestReconcile_IdenticalBytesIsNotAConflict(t *testing.T) {
 	a, _ := conflictFixture(t, "alpha\nbravo\n") // same bytes as on open
 	before := a.tabs[0].Mtime
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 
 	if a.tabs[0].Conflict {
 		t.Fatal("a rewrite that changed no bytes is not a conflict")
@@ -2250,7 +2250,7 @@ func TestReconcile_CleanTabReloadsQuietly(t *testing.T) {
 	a.tabs[0].Mtime = a.tabs[0].Mtime.Add(-time.Hour)
 	a.statusMsg = "" // drop openFile's own flash.
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 
 	if got := a.tabs[0].Buffer.String(); got != "from the agent\n" {
 		t.Fatalf("a clean tab should reload; buffer is %q", got)
@@ -2299,7 +2299,7 @@ func TestDrawTabBar_ConflictDotUsesTheConflictColour(t *testing.T) {
 		t.Fatalf("dirty dot colour: got %v, want Modified %v", got, a.theme.Modified)
 	}
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 	a.drawTabBar()
 	a.screen.Show()
 	if got := dotColour(t, a); got != a.theme.Conflict {
@@ -2328,7 +2328,7 @@ func dotColour(t *testing.T, a *App) tcell.Color {
 // not, so the status bar has to keep saying it.
 func TestDrawStatusBar_ConflictSaysChangedOnDisk(t *testing.T) {
 	a, _ := conflictFixture(t, "from the agent\n")
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 	// Step past the flash so the status bar shows tab state, not a message.
 	a.statusUntil = time.Now().Add(-time.Second)
 
@@ -2345,7 +2345,7 @@ func TestDrawStatusBar_ConflictSaysChangedOnDisk(t *testing.T) {
 // load-bearing refusal: the save the user asked for turns into a question.
 func TestSaveTabAt_ConflictedOpensThePromptAndWritesNothing(t *testing.T) {
 	a, target := conflictFixture(t, "from the agent\n")
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 
 	if a.saveTabAt(0) {
 		t.Fatal("saveTabAt should report failure on a conflicted tab")

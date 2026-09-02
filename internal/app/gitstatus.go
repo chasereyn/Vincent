@@ -129,7 +129,11 @@ func loadGitLineChanges(rootDir, path string) map[int]editor.GitLineChange {
 	if rootDir == "" || path == "" {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", rootDir, "diff", "--unified=0", "HEAD", "--", path).Output()
+	// gitCmd, not a bare exec.Command: this runs on the background poller
+	// every 10 seconds against a repo an agent is writing to, so
+	// GIT_OPTIONAL_LOCKS=0 keeps it from contending with the agent's own
+	// `git add` for .git/index.lock. See gitentries.go.
+	out, err := gitCmd(rootDir, "diff", "--unified=0", "HEAD", "--", path).Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}

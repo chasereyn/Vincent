@@ -422,6 +422,14 @@ type App struct {
 	// treeRefreshStop signals the background tree-refresh goroutine to exit.
 	treeRefreshStop chan struct{}
 
+	// gitPollBusy is true from the moment a background git refresh is
+	// launched until its result is applied. One in flight at a time: a slow
+	// repo would otherwise stack up workers, each forking git, which makes
+	// the stall it exists to avoid worse. Written only on the main
+	// goroutine (startGitPoll and applyGitPoll), so it needs no lock — see
+	// gitpoll.go.
+	gitPollBusy bool
+
 	// gitBranch is the current branch name for the project root (or a
 	// short commit SHA when HEAD is detached). Empty when the root isn't
 	// a git repo. Updated on the same 10-second tick as refreshGitStatus.
@@ -461,6 +469,15 @@ type App struct {
 	// inserted once at End() so an N-line paste is one undo step.
 	pasting  bool
 	pasteBuf []rune
+	// lastFrame is the observable state as of the last painted frame, and
+	// frames counts the paints. The event loop compares a pure-motion
+	// event's result against lastFrame and skips the repaint when they
+	// match — see frame.go, which explains why the baseline is the last
+	// frame rather than the state before the event. frames exists for the
+	// tests: "did that motion event cost a frame" is otherwise
+	// unobservable.
+	lastFrame frameKey
+	frames    int
 
 	quit bool
 }
@@ -632,20 +649,33 @@ func (a *App) refreshGitStatus() {
 	// exactly the difference that tempts you into a second run and a
 	// second parser — and then they drift, and a file is orange in the
 	// tree but missing from the panel.
-	snap := loadGitSnapshot(a.rootDir)
+	a.applyGitSnapshot(loadGitSnapshot(a.rootDir))
+	a.refreshGitLineChanges()
+}
+
+// applyGitSnapshot stamps one `git status` read onto the Changes panel, the
+// tree's dirty-path maps, and the branch label.
+//
+// Split out of refreshGitStatus so the background poller can read a snapshot
+// on its own goroutine and hand it here without a second copy of the
+// stamping rules — which is the same "one parse, two consumers" argument
+// that gitentries.go makes, one level up. Every line of this writes UI
+// state, so it must only ever run on the main goroutine.
+func (a *App) applyGitSnapshot(snap gitSnapshot) {
+	if a.tree == nil {
+		return
+	}
 	a.refreshGitPanel(snap)
 	if !snap.IsRepo {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
-		a.refreshGitLineChanges()
 		return
 	}
 	dirtyFiles := rebaseGitPaths(snap.DirtyFiles(), a.tree.Root.Path)
 	a.tree.DirtyFiles = dirtyFiles
 	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
 	a.gitBranch = snap.Branch
-	a.refreshGitLineChanges()
 }
 
 // refreshGitLineChanges refreshes gutter markers for every open text tab.
@@ -700,20 +730,43 @@ func (a *App) Close() {
 }
 
 // Run is the editor's main event loop. It blocks on PollEvent, dispatches
-// each event, redraws, and exits when a.quit is set.
+// each event, redraws when the screen would actually differ, and exits when
+// a.quit is set.
+//
+// Two things here are load-bearing and both are about mouse motion; see
+// frame.go for the measurement behind them.
+//
+//   - handleEventForFrame answers "does this event change what the user
+//     sees". A pure-motion event that changed nothing observable skips the
+//     repaint entirely. Everything else always repaints.
+//   - The inner drain loop empties whatever tcell has already queued before
+//     painting, so a burst of motion reports (the pointer crossing forty
+//     cells in one 16 ms window) costs one frame rather than forty. Events
+//     are still handled individually and in arrival order, so a key or a
+//     resize buried in the burst behaves exactly as it would alone — it just
+//     shares the frame with its neighbours.
 func (a *App) Run() error {
 	a.width, a.height = a.screen.Size()
-	a.draw()
-	a.screen.Show()
+	a.paint()
 
 	for !a.quit {
 		ev := a.screen.PollEvent()
 		if ev == nil {
 			break
 		}
-		a.handleEvent(ev)
-		a.draw()
-		a.screen.Show()
+		dirty := a.handleEventForFrame(ev)
+		for !a.quit && a.screen.HasPendingEvent() {
+			next := a.screen.PollEvent()
+			if next == nil {
+				return nil
+			}
+			if a.handleEventForFrame(next) {
+				dirty = true
+			}
+		}
+		if dirty {
+			a.paint()
+		}
 	}
 	return nil
 }
@@ -743,6 +796,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.quit = true
 	case *treeRefreshEvent:
 		a.refreshTreeNow()
+	case *gitPollEvent:
+		// A background refresh came back. Everything in it was read on a
+		// worker goroutine; this is where it becomes UI state. See
+		// gitpoll.go.
+		a.applyGitPoll(e.res)
 	case *finderRebuiltEvent:
 		// The background indexer just finished. Re-run the visible
 		// query so "Indexing…" gives way to real results without
@@ -753,23 +811,26 @@ func (a *App) handleEvent(ev tcell.Event) {
 	}
 }
 
-// refreshTreeNow re-runs the same refresh pipeline the 10s timer
-// fires: rescan the file tree (preserving expansion state), reconcile
-// any open tabs with disk, refresh git status, and invalidate the
-// finder index so a freshly-pulled file shows up everywhere at once.
-// Called from the periodic event and from runCustomAction's success
-// path so a Copy-from-remote action's output is visible immediately
-// instead of after the next tick.
+// refreshTreeNow is what the 10s timer fires: rescan the file tree
+// (preserving expansion state) and kick off a background git refresh.
+//
+// The tree rescan stays on this goroutine — it is ReadDir over the loaded
+// directories, and the identity-preserving reload has to be able to mutate
+// the live *Node tree. Everything that shells out to git, plus the disk
+// stats behind the open-tab reconcile, is now the poller's job: those were
+// four-plus forks per tick on the UI thread, and a fork that blocks blocks
+// the event loop, which is the pointer freezing mid-review while an agent
+// hammers the repo. The results come back as a gitPollEvent and are applied
+// by applyGitPoll. See gitpoll.go.
 func (a *App) refreshTreeNow() {
 	a.refreshTree()
-	a.reconcileOpenTabsWithDisk()
-	a.refreshGitStatus()
+	a.startGitPoll()
 	a.invalidateFinder()
 }
 
-// reconcileOpenTabsWithDisk runs once per background tick. For every
-// open tab with a real path it stats the file, compares the on-disk
-// mtime to what the tab last knew, and reacts:
+// reconcileOpenTabsWithDisk applies one background poll to the open tabs.
+// For every tab with a real path it compares the polled on-disk mtime to
+// what the tab last knew, and reacts:
 //
 //   - File missing  → flash once, mark the tab dirty so the user knows.
 //   - Disk newer, tab clean → reload the buffer, silently.
@@ -794,9 +855,20 @@ func (a *App) refreshTreeNow() {
 // The byte comparison is not an optimisation. Agents and formatters bump
 // mtime without changing content constantly, and a warning that fires on
 // those is one the user stops reading.
-func (a *App) reconcileOpenTabsWithDisk() {
+// Tabs the poll has no entry for are also skipped: those were tabs the poll has no entry for: those were
+// opened after the poll started, and the next tick will cover them. That is
+// also what drops results for a tab closed while the poll was in flight —
+// the loop walks the live tab list, not the poll's.
+//
+// The stat itself happened on the poller's goroutine (gitpoll.go); the
+// decisions and every write below happen here, on the main goroutine.
+func (a *App) reconcileOpenTabsWithDisk(files map[string]gitPollFile) {
 	for _, tab := range a.tabs {
 		if tab.Path == "" {
+			continue
+		}
+		polled, ok := files[tab.Path]
+		if !ok {
 			continue
 		}
 		if tab.IsDiff() {
@@ -804,11 +876,16 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			// reload, nothing can be dirty, and a file disappearing is a
 			// legitimate diff (an all-deletions one) rather than the
 			// warning case it is for an open file.
-			a.reconcileDiffTab(tab)
+			a.reconcileDiffTab(tab, polled)
 			continue
 		}
-		info, err := os.Stat(tab.Path)
-		if os.IsNotExist(err) {
+		if tab.IsImage() {
+			continue
+		}
+		// Gutter markers first: they are a straight overwrite and do not
+		// depend on any of the mtime reasoning below.
+		tab.GitLines = polled.lines
+		if polled.missing {
 			if !tab.DiskGone {
 				tab.DiskGone = true
 				tab.Dirty = true
@@ -816,7 +893,7 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			}
 			continue
 		}
-		if err != nil {
+		if polled.statErr {
 			// Permission denied or some other transient stat error — leave
 			// the tab as-is rather than spamming the user with a flash.
 			continue
@@ -827,7 +904,7 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			tab.DiskGone = false
 			tab.Mtime = time.Time{}
 		}
-		if !info.ModTime().After(tab.Mtime) {
+		if !polled.mtime.After(tab.Mtime) {
 			continue // unchanged on disk.
 		}
 		if tab.Dirty {
@@ -841,7 +918,7 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			if readErr == nil && tab.DiskUnchangedSince(data) {
 				// Same bytes as when we loaded it: something rewrote the
 				// file without changing it. Not a conflict.
-				tab.Mtime = info.ModTime()
+				tab.Mtime = polled.mtime
 				continue
 			}
 			tab.Conflict = true
@@ -2314,11 +2391,30 @@ func (a *App) menuQuit() {
 // Drawing
 // -----------------------------------------------------------------------------
 
-// draw paints the entire screen. Called once per event in the main loop.
-// The action modal — if open — is drawn last so it sits on top of everything.
+// draw paints the entire screen. Called from the main loop for any event
+// that changed something observable — see frame.go for the pure-motion
+// events that no longer reach it. The action modal — if open — is drawn last
+// so it sits on top of everything.
+//
+// The deferred frameKey stamp is what the motion guard compares against, and
+// it has to be taken on the way out rather than the way in: drawing the git
+// panel re-clamps its scroll offset, so a key sampled at the top would
+// record a value the painted frame does not match and buy a spurious repaint
+// on the next motion event. The counter is for tests.
 func (a *App) draw() {
-	a.screen.Clear()
+	a.frames++
+	defer func() { a.lastFrame = a.frameKey() }()
 
+	// No screen.Clear() here, deliberately. Clear() writes a space in the
+	// default style into every cell of the back buffer, which marks all
+	// 10,000 of them dirty and throws away tcell's record of what it last
+	// sent — so the painters below re-transmit the entire screen even when
+	// the frame is identical to the one before it. Every region fills its
+	// own rect (tree, splitters, panel, tab bar, editor, find bar, status
+	// bar, and drawTooSmall for the degenerate case), and between them they
+	// tile the window exactly, so the clear was redundant for coverage and
+	// expensive for bandwidth. A resize is the one case that genuinely needs
+	// a full repaint, and handleEvent calls screen.Sync() for it.
 	if a.width < minWidth || a.height < minHeight {
 		a.drawTooSmall()
 		return

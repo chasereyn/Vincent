@@ -26,7 +26,7 @@ import (
 func conflictedApp(t *testing.T, diskContent string) (*App, string) {
 	t.Helper()
 	a, target := conflictFixture(t, diskContent)
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 	if !a.tabs[0].Conflict {
 		t.Fatal("fixture should have produced a conflict")
 	}
@@ -217,7 +217,7 @@ func TestReconcileDiffTab_LeavesAFrozenDiffAlone(t *testing.T) {
 	before := dt.Buffer.String()
 	dt.Mtime = dt.Mtime.Add(-time.Hour) // force the "disk is newer" branch
 
-	a.reconcileOpenTabsWithDisk()
+	a.reconcileOpenTabsWithDisk(pollNow(a))
 
 	if got := dt.Buffer.String(); got != before {
 		t.Fatalf("a frozen diff should be untouched;\nbefore: %q\nafter:  %q", before, got)

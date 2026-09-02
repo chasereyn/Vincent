@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/chasereyn/vincent/internal/diff"
+	"github.com/chasereyn/vincent/internal/editor"
 )
 
 // diffTestRepo builds a repo with one committed file, then modifies it and
@@ -281,10 +282,11 @@ func TestReconcileDiffTab_TracksTheFile(t *testing.T) {
 	tab := a.activeTabPtr()
 	tab.ScrollY = 1
 
-	// Nothing changed on disk — reconcile must be a no-op, or every tick
-	// would re-shell to git for every open diff.
+	// Nothing changed on disk — reconcile must be a no-op even though the
+	// poller handed it fresh rows, or a tab you had scrolled would be
+	// rebuilt under you every ten seconds for nothing.
 	rowsBefore := len(tab.DiffRows)
-	a.reconcileDiffTab(tab)
+	a.reconcileDiffTab(tab, pollDiffTab(a, tab))
 	if len(tab.DiffRows) != rowsBefore {
 		t.Errorf("reconcile changed a diff whose file was untouched")
 	}
@@ -294,7 +296,7 @@ func TestReconcileDiffTab_TracksTheFile(t *testing.T) {
 	// two writes inside the same tick can share an mtime.
 	writeFileT(t, target, "ALPHA\nBRAVO\nCHARLIE\n")
 	tab.Mtime = tab.Mtime.Add(-time.Hour)
-	a.reconcileDiffTab(tab)
+	a.reconcileDiffTab(tab, pollDiffTab(a, tab))
 
 	if _, deleted := tab.DiffStats(); deleted != 3 {
 		t.Errorf("refreshed diff has %d deletions, want 3", deleted)
@@ -318,7 +320,7 @@ func TestReconcileDiffTab_SurvivesADeletedFile(t *testing.T) {
 	if err := os.Remove(target); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	a.reconcileDiffTab(tab)
+	a.reconcileDiffTab(tab, pollDiffTab(a, tab))
 
 	if tab.Dirty {
 		t.Error("a diff tab must never be marked dirty — there is nothing to save")
@@ -341,4 +343,13 @@ func TestHasDiffableTab(t *testing.T) {
 	if !a.hasDiffableTab() {
 		t.Error("an open file should be diffable")
 	}
+}
+
+// pollDiffTab performs the reads the background poller would have performed
+// for one diff tab, synchronously. The reconcile path takes its stat and its
+// diff rows as data now (see gitpoll.go), so a test has to supply them —
+// doing it through the real pollFile keeps these tests exercising the actual
+// git reads rather than a hand-built fixture.
+func pollDiffTab(a *App, tab *editor.Tab) gitPollFile {
+	return pollFile(a.rootDir, gitPollTarget{path: tab.Path, diff: true})
 }
