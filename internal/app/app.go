@@ -2214,8 +2214,16 @@ func (a *App) draw() {
 	a.frames++
 	defer func() { a.lastFrame = a.frameKey() }()
 
-	a.screen.Clear()
-
+	// No screen.Clear() here, deliberately. Clear() writes a space in the
+	// default style into every cell of the back buffer, which marks all
+	// 10,000 of them dirty and throws away tcell's record of what it last
+	// sent — so the painters below re-transmit the entire screen even when
+	// the frame is identical to the one before it. Every region fills its
+	// own rect (tree, splitters, panel, tab bar, editor, find bar, status
+	// bar, and drawTooSmall for the degenerate case), and between them they
+	// tile the window exactly, so the clear was redundant for coverage and
+	// expensive for bandwidth. A resize is the one case that genuinely needs
+	// a full repaint, and handleEvent calls screen.Sync() for it.
 	if a.width < minWidth || a.height < minHeight {
 		a.drawTooSmall()
 		return

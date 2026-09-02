@@ -134,6 +134,55 @@ type Tab struct {
 	// real tab; a 2-space-indented file gets two spaces. Mixed-style
 	// files take the dominant signal.
 	IndentUnit string
+
+	// rowScratch is one row's worth of assembled cells, reused across
+	// rows and across frames. See Render for why the row is composed
+	// before it is written; the reuse is just to keep a 200-column
+	// editor from allocating fifty slices a frame.
+	rowScratch []renderCell
+}
+
+// renderCell is one screen cell's final content: the rune to show and the
+// style to show it in. Render assembles a whole row of these and writes each
+// cell exactly once.
+type renderCell struct {
+	ch rune
+	st tcell.Style
+}
+
+// rowBuf returns a w-cell scratch row, growing the backing array only when
+// the editor pane gets wider than it has ever been.
+func (t *Tab) rowBuf(w int) []renderCell {
+	if w < 0 {
+		w = 0
+	}
+	if cap(t.rowScratch) < w {
+		t.rowScratch = make([]renderCell, w)
+	}
+	t.rowScratch = t.rowScratch[:w]
+	return t.rowScratch
+}
+
+// fillRow resets every cell of a scratch row to the same rune and style.
+func fillRow(row []renderCell, ch rune, st tcell.Style) {
+	for i := range row {
+		row[i] = renderCell{ch: ch, st: st}
+	}
+}
+
+// flushRow writes an assembled row to the screen, one SetContent per cell.
+//
+// This is the whole point of the scratch row. tcell's CellBuffer.Put marks a
+// cell dirty — and clears the "what did we last send" record — whenever the
+// incoming grapheme differs from what the cell currently holds. So the
+// fill-with-spaces-then-write-glyphs idiom dirties every non-blank cell
+// twice, and the frame goes back over the wire in full even when it is
+// identical to the last one. Writing each cell once, already carrying its
+// final rune and style, lets tcell compare against reality and send nothing.
+func flushRow(scr tcell.Screen, x, cy int, row []renderCell) {
+	for i, c := range row {
+		scr.SetContent(x+i, cy, c.ch, nil, c.st)
+	}
 }
 
 // NewTab opens path and returns a Tab. If the file does not exist, the tab
@@ -571,6 +620,13 @@ func (t *Tab) EnsureVisible(viewW, viewH int) {
 // Render draws the editor's content (line numbers, code with syntax
 // highlighting, selection, cursor) into the rectangle (x, y, w, h).
 // Image tabs delegate to renderImage instead of drawing text.
+//
+// Every cell is written exactly once, from a scratch row assembled first.
+// This used to be three passes — fill the whole rect with spaces, fill each
+// row again with its background, then write glyphs on top — which is the
+// natural way to write a terminal painter and also the reason an unchanged
+// frame cost 12 KB of escape sequences instead of nothing. flushRow explains
+// the mechanism. Do not reintroduce a fill pass here.
 func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if t.IsImage() {
 		t.renderImage(scr, th, x, y, w, h)
@@ -602,14 +658,6 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	bg := th.BG
 	bgStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text)
 
-	// Paint the entire editor rectangle with the base background first so
-	// any cells we don't draw (short lines, blank rows) still get themed.
-	for cy := y; cy < y+h; cy++ {
-		for cx := x; cx < x+w; cx++ {
-			scr.SetContent(cx, cy, ' ', nil, bgStyle)
-		}
-	}
-
 	selStart, selEnd := PosOrdered(t.Anchor, t.Cursor)
 	hasSel := t.HasSelection()
 
@@ -620,12 +668,20 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		contentW = 1
 	}
 
+	// One scratch row, reused for every row of every frame. See renderRow
+	// for why the row is assembled here instead of painted in three passes.
+	rowBuf := t.rowBuf(w)
+
 	for row := 0; row < h; row++ {
 		lineIdx := t.ScrollY + row
-		if lineIdx >= t.Buffer.LineCount() {
-			break
-		}
 		cy := y + row
+		if lineIdx >= t.Buffer.LineCount() {
+			// Past the end of the file. Still themed — the pane must be
+			// black all the way down, not the terminal's default.
+			fillRow(rowBuf, ' ', bgStyle)
+			flushRow(scr, x, cy, rowBuf)
+			continue
+		}
 		isCursorLine := lineIdx == t.Cursor.Line
 
 		// Pick the row background — a hair lighter on the cursor's line so
@@ -636,9 +692,13 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 		lineBgStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Text)
 
-		// Re-paint this row with its (possibly highlighted) bg.
-		for cx := x; cx < x+w; cx++ {
-			scr.SetContent(cx, cy, ' ', nil, lineBgStyle)
+		// Start the row as blanks in its (possibly highlighted) bg. Short
+		// lines and the gap after the gutter keep these.
+		fillRow(rowBuf, ' ', lineBgStyle)
+		put := func(cx int, ch rune, st tcell.Style) {
+			if idx := cx - x; idx >= 0 && idx < len(rowBuf) {
+				rowBuf[idx] = renderCell{ch: ch, st: st}
+			}
 		}
 
 		// Gutter / line number, right-aligned with one trailing space.
@@ -648,13 +708,13 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			gutterStyle = gutterStyle.Foreground(th.AccentSoft)
 		}
 		if marker, ok := t.GitLines[lineIdx]; ok && marker != GitLineNone {
-			scr.SetContent(x, cy, gitLineMarkerRune(marker), nil, gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
+			put(x, gitLineMarkerRune(marker), gutterStyle.Foreground(gitLineMarkerColor(th, marker)))
 		}
 		for i, r := range numStr {
 			if i == 0 && t.GitLines[lineIdx] != GitLineNone {
 				continue
 			}
-			scr.SetContent(x+i, cy, r, nil, gutterStyle)
+			put(x+i, r, gutterStyle)
 		}
 
 		// Line content, with syntax styles, selection bg, and line bg.
@@ -710,7 +770,7 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 					if cell > 0 {
 						ch = ' '
 					}
-					scr.SetContent(contentX+sc, cy, ch, nil, st)
+					put(contentX+sc, ch, st)
 				}
 			}
 			visualCol += width
@@ -725,11 +785,13 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		// corresponding to ScrollX.
 		overflowStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
 		if t.ScrollX > 0 {
-			scr.SetContent(contentX, cy, '‹', nil, overflowStyle)
+			put(contentX, '‹', overflowStyle)
 		}
 		if visualCol-scrollVisual > contentW {
-			scr.SetContent(contentX+contentW-1, cy, '›', nil, overflowStyle)
+			put(contentX+contentW-1, '›', overflowStyle)
 		}
+
+		flushRow(scr, x, cy, rowBuf)
 	}
 
 	// Position the hardware cursor at its visual column (so a cursor

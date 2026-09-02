@@ -432,6 +432,19 @@ func TestPaint_UnchangedFrameCostsNoBytes(t *testing.T) {
 	if firstFrame == 0 {
 		t.Error("the first paint wrote nothing — the harness is not measuring anything")
 	}
+	// An identical repaint measured 12,828 bytes before the painters were
+	// made idempotent and screen.Clear() came out of draw(); it measures 343
+	// after. The ceiling here is deliberately loose — the point is to fail
+	// loudly if someone reintroduces a fill-then-glyph pass or a Clear(),
+	// which puts the number back into five figures, not to pin an exact
+	// byte count that a theme tweak would break.
+	const repaintCeiling = 4096
+	if repaintBytes > repaintCeiling {
+		t.Errorf("an identical repaint cost %d bytes, want under %d — a painter is "+
+			"probably filling its rect before writing glyphs again, or draw() got "+
+			"its screen.Clear() back",
+			repaintBytes, repaintCeiling)
+	}
 }
 
 // sampleSource is a few hundred lines of plausible Go so the editor pane is

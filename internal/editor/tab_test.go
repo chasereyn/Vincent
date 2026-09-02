@@ -1118,3 +1118,91 @@ func TestTab_Render_GitMarkerDoesNotOverlapLineNumber(t *testing.T) {
 		}
 	}
 }
+
+// countingScreen wraps a SimulationScreen and tallies how many times each
+// cell is written. Embedding the interface gives us every method for free;
+// only SetContent needs intercepting.
+type countingScreen struct {
+	tcell.SimulationScreen
+	writes map[[2]int]int
+}
+
+// newCountingScreen returns a screen that records per-cell write counts.
+func newCountingScreen(inner tcell.SimulationScreen) *countingScreen {
+	return &countingScreen{SimulationScreen: inner, writes: map[[2]int]int{}}
+}
+
+// SetContent records the write and forwards it to the real screen.
+func (c *countingScreen) SetContent(x, y int, mainc rune, combc []rune, style tcell.Style) {
+	c.writes[[2]int{x, y}]++
+	c.SimulationScreen.SetContent(x, y, mainc, combc, style)
+}
+
+// TestRender_WritesEachCellExactlyOnce pins the property that makes an
+// unchanged frame free.
+//
+// Render used to paint in three passes — fill the whole rect with spaces,
+// fill each row again with its background, then write the glyphs. tcell marks
+// a cell dirty (and forgets what it last transmitted) every time the incoming
+// grapheme differs from what the cell holds, so a cell written twice is
+// re-sent to the terminal even when the frame is identical to the last one.
+// At 200x50 that measured 12,828 bytes per repaint against 343 with single
+// writes. A second write per cell puts it straight back.
+func TestRender_WritesEachCellExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	// A tab-indented line longer than the viewport: the blank rows past EOF,
+	// the horizontal-overflow marker, and the padding cells of a multi-cell
+	// tab are all cells the old fill passes used to touch more than once.
+	content := "package main\n\nfunc main() {\n\tprintln(\"" + strings.Repeat("x", 200) + "\")\n}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tab, err := NewTab(path)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	tab.GitLines = map[int]GitLineChange{1: GitLineAdded, 3: GitLineModified}
+	tab.Cursor = Position{Line: 3, Col: 20}
+	tab.Anchor = Position{Line: 3, Col: 5}
+
+	const w, h = 60, 20
+	inner := newSimScreen(t, w, h)
+	defer inner.Fini()
+	scr := newCountingScreen(inner)
+
+	tab.Render(scr, theme.Default(), 0, 0, w, h)
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			switch n := scr.writes[[2]int{x, y}]; {
+			case n == 0:
+				t.Fatalf("cell (%d,%d) never written — dropping the full-rect fill "+
+					"left a hole the terminal will show stale content in", x, y)
+			case n > 1:
+				t.Fatalf("cell (%d,%d) written %d times, want exactly 1", x, y, n)
+			}
+		}
+	}
+}
+
+// TestRender_ScrolledPastEndStillPaintsEveryCell is the same coverage check
+// for the case that used to rely entirely on the full-rect fill: a viewport
+// taller than the file it is showing.
+func TestRender_ScrolledPastEndStillPaintsEveryCell(t *testing.T) {
+	tab := &Tab{Buffer: NewBuffer("one\ntwo\n"), StyleStale: true}
+	const w, h = 40, 15
+	inner := newSimScreen(t, w, h)
+	defer inner.Fini()
+	scr := newCountingScreen(inner)
+
+	tab.Render(scr, theme.Default(), 0, 0, w, h)
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if n := scr.writes[[2]int{x, y}]; n != 1 {
+				t.Fatalf("cell (%d,%d) written %d times, want exactly 1", x, y, n)
+			}
+		}
+	}
+}
