@@ -447,6 +447,16 @@ type App struct {
 	// SIGTERM. Held so a normal exit can unregister it. See shutdown.go.
 	signalStop chan os.Signal
 
+	// lastFrame is the observable state as of the last painted frame, and
+	// frames counts the paints. The event loop compares a pure-motion
+	// event's result against lastFrame and skips the repaint when they
+	// match — see frame.go, which explains why the baseline is the last
+	// frame rather than the state before the event. frames exists for the
+	// tests: "did that motion event cost a frame" is otherwise
+	// unobservable.
+	lastFrame frameKey
+	frames    int
+
 	quit bool
 }
 
@@ -675,20 +685,43 @@ func (a *App) Close() {
 }
 
 // Run is the editor's main event loop. It blocks on PollEvent, dispatches
-// each event, redraws, and exits when a.quit is set.
+// each event, redraws when the screen would actually differ, and exits when
+// a.quit is set.
+//
+// Two things here are load-bearing and both are about mouse motion; see
+// frame.go for the measurement behind them.
+//
+//   - handleEventForFrame answers "does this event change what the user
+//     sees". A pure-motion event that changed nothing observable skips the
+//     repaint entirely. Everything else always repaints.
+//   - The inner drain loop empties whatever tcell has already queued before
+//     painting, so a burst of motion reports (the pointer crossing forty
+//     cells in one 16 ms window) costs one frame rather than forty. Events
+//     are still handled individually and in arrival order, so a key or a
+//     resize buried in the burst behaves exactly as it would alone — it just
+//     shares the frame with its neighbours.
 func (a *App) Run() error {
 	a.width, a.height = a.screen.Size()
-	a.draw()
-	a.screen.Show()
+	a.paint()
 
 	for !a.quit {
 		ev := a.screen.PollEvent()
 		if ev == nil {
 			break
 		}
-		a.handleEvent(ev)
-		a.draw()
-		a.screen.Show()
+		dirty := a.handleEventForFrame(ev)
+		for !a.quit && a.screen.HasPendingEvent() {
+			next := a.screen.PollEvent()
+			if next == nil {
+				return nil
+			}
+			if a.handleEventForFrame(next) {
+				dirty = true
+			}
+		}
+		if dirty {
+			a.paint()
+		}
 	}
 	return nil
 }
@@ -2167,9 +2200,20 @@ func (a *App) menuQuit() {
 // Drawing
 // -----------------------------------------------------------------------------
 
-// draw paints the entire screen. Called once per event in the main loop.
-// The action modal — if open — is drawn last so it sits on top of everything.
+// draw paints the entire screen. Called from the main loop for any event
+// that changed something observable — see frame.go for the pure-motion
+// events that no longer reach it. The action modal — if open — is drawn last
+// so it sits on top of everything.
+//
+// The deferred frameKey stamp is what the motion guard compares against, and
+// it has to be taken on the way out rather than the way in: drawing the git
+// panel re-clamps its scroll offset, so a key sampled at the top would
+// record a value the painted frame does not match and buy a spurious repaint
+// on the next motion event. The counter is for tests.
 func (a *App) draw() {
+	a.frames++
+	defer func() { a.lastFrame = a.frameKey() }()
+
 	a.screen.Clear()
 
 	if a.width < minWidth || a.height < minHeight {
