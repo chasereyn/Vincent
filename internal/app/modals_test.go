@@ -422,11 +422,12 @@ func TestHandleConfirmKey_AllBranches(t *testing.T) {
 // file-tree right-click menu. Vincent reviews code, it does not edit it, so
 // the menu must never regain New File / Rename / Delete — the three entries
 // this replaced when fileops.go was dropped. Folder, file, and project root
-// all collapse to the same two clipboard rows, which is exactly the point:
-// there is no node type for which the tree offers a mutation.
+// all offer clipboard rows and root switching, and nothing else: there is
+// no node type for which the tree offers a mutation.
 //
-// When phase 3 adds review actions here (View diff, Comment on file), extend
-// wantLabels — but nothing added should write to the working tree.
+// "Set as root" and "Change root…" are here despite the invariant because
+// neither writes anything — they repoint Vincent at a different folder. Any
+// future addition must clear the same bar.
 func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "child")
@@ -453,14 +454,16 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 	// Read-only entries only. "View diff" is a file-only addition from
 	// phase 1; nothing here creates, renames, or deletes anything.
 	copyLabels := []string{"Copy rel path", "Copy abs path"}
+	// "Set as root" is folders-only and skipped on the folder that IS the
+	// root, so the root node's menu is the shortest of the three.
 	cases := []struct {
 		name string
 		node *filetree.Node
 		want []string
 	}{
-		{"folder", find("child"), copyLabels},
-		{"file", find("f.txt"), append([]string{"View diff"}, copyLabels...)},
-		{"root", a.tree.Root, copyLabels},
+		{"folder", find("child"), []string{"Copy rel path", "Copy abs path", "Set as root", "Change root…"}},
+		{"file", find("f.txt"), []string{"View diff", "Copy rel path", "Copy abs path", "Change root…"}},
+		{"root", a.tree.Root, append(append([]string{}, copyLabels...), "Change root…")},
 	}
 
 	for _, tc := range cases {

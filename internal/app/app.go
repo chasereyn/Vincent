@@ -463,6 +463,14 @@ type App struct {
 	finderSelected int
 	finderResults  []finder.Result
 
+	// rootPicker is the Esc-o root switcher — recent roots, or a typed
+	// path browsed a directory at a time. configPath is where
+	// loadUserConfig read config.json from, held so a root switch can
+	// write the recents list back to the same file. Both live in
+	// rootpicker.go.
+	rootPicker rootPickerState
+	configPath string
+
 	// confirmCancelHook runs when the active confirm modal is dismissed
 	// without a Yes — i.e. the user picked No, hit Esc, or clicked
 	// outside. Set after openConfirm by flows that want to react to the
@@ -588,6 +596,11 @@ func New(rootDir string) (*App, error) {
 	a.setActiveFolder(tree.Root.Path)
 	a.loadUserConfig()
 	installReviewLog()
+	// Remember where we started, so the Esc-o picker's recents list is
+	// seeded on a fresh install and reordered on every launch. Uses the
+	// tree's resolved absolute path rather than the raw argument, which is
+	// often "." — see rootpicker.go.
+	a.recordRecentRoot(tree.Root.Path)
 	a.refreshGitStatus()
 	a.applyStartupPanelDefaults()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
@@ -672,7 +685,12 @@ func NewSingleFile(filePath string) (*App, error) {
 // config flashes a status message but never blocks startup — the
 // editor falls back to Defaults() and keeps going.
 func (a *App) loadUserConfig() {
-	cfg, err := config.Load(config.DefaultPath())
+	// Held so a root switch can write recentRoots back to the same file
+	// this read — see recordRecentRoot in rootpicker.go. Empty is the
+	// "no config configured" case, which both Load and Save treat as a
+	// no-op rather than an error.
+	a.configPath = config.DefaultPath()
+	cfg, err := config.Load(a.configPath)
 	if err != nil {
 		a.flash("config: " + err.Error())
 	}
@@ -1158,6 +1176,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFinderKey(ev)
 		return
 	}
+	if a.rootPicker.open {
+		a.handleRootPickerKey(ev)
+		return
+	}
 	if a.pickerOpen {
 		a.handlePickerKey(ev)
 		return
@@ -1399,6 +1421,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.finderOpen {
 		a.handleFinderMouse(x, y, btn)
+		return
+	}
+	if a.rootPicker.open {
+		a.handleRootPickerMouse(x, y, btn)
 		return
 	}
 	if a.pickerOpen {
@@ -2640,6 +2666,9 @@ func (a *App) draw() {
 	}
 	if a.finderOpen {
 		a.drawFinder()
+	}
+	if a.rootPicker.open {
+		a.drawRootPicker()
 	}
 	if a.pickerOpen {
 		a.drawReviewPicker()

@@ -94,6 +94,16 @@ type frameKey struct {
 	finderScroll   int
 	finderCount    int
 
+	// Root picker. Its hover highlight follows the pointer, so a motion
+	// event that moves the highlight has to cost a frame — that is the
+	// whole contract of this struct.
+	rootPickerOpen       bool
+	rootPickerSelected   int
+	rootPickerScroll     int
+	rootPickerListScroll int
+	rootPickerCount      int
+	rootPickerQuery      string
+
 	findOpen   bool
 	findCursor int
 	findScroll int
@@ -151,15 +161,23 @@ func (a *App) frameKey() frameKey {
 		finderSelected:    a.finderSelected,
 		finderScroll:      a.finderScroll,
 		finderCount:       len(a.finderResults),
-		findOpen:          a.findOpen,
-		findCursor:        a.findCursor,
-		findScroll:        a.findScroll,
-		dragMode:          a.dragMode,
-		activeTab:         a.activeTab,
-		tabCount:          len(a.tabs),
-		leaderArmed:       a.leaderArmed(),
-		statusMsg:         a.statusMsg,
-		flashLive:         a.statusMsg != "" && time.Now().Before(a.statusUntil),
+
+		rootPickerOpen:       a.rootPicker.open,
+		rootPickerSelected:   a.rootPicker.selected,
+		rootPickerScroll:     a.rootPicker.scroll,
+		rootPickerListScroll: a.rootPicker.listScroll,
+		rootPickerCount:      len(a.rootPicker.rows),
+		rootPickerQuery:      string(a.rootPicker.query),
+
+		findOpen:    a.findOpen,
+		findCursor:  a.findCursor,
+		findScroll:  a.findScroll,
+		dragMode:    a.dragMode,
+		activeTab:   a.activeTab,
+		tabCount:    len(a.tabs),
+		leaderArmed: a.leaderArmed(),
+		statusMsg:   a.statusMsg,
+		flashLive:   a.statusMsg != "" && time.Now().Before(a.statusUntil),
 	}
 	if tab := a.activeTabPtr(); tab != nil {
 		k.tabPath = tab.Path

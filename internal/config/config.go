@@ -21,6 +21,9 @@
 //	{"tabBar": true}     // show the full tab strip; default is false —
 //	                     // row 0 shows only the ≡ button and the active
 //	                     // tab's name until toggled on (Esc-b)
+//	{"recentRoots": [    // folders Vincent has been rooted at, most
+//	  "/Users/x/a",      // recent first, capped at maxRecentRoots.
+//	  "/Users/x/b"]}     // Rewritten by Save on every root switch.
 //
 // The loader is best-effort the same way customactions is: missing
 // file → defaults, malformed file → error returned for the app to
@@ -57,21 +60,36 @@ type Config struct {
 	// is a wasted row, so row 0 shows just the ≡ button and the active
 	// tab's name until the user turns it on (Esc-b, or the ≡ menu).
 	TabBar bool
+
+	// RecentRoots is the folders Vincent has been rooted at, most recent
+	// first and capped at maxRecentRoots. It is the list the Esc-o root
+	// picker shows, which is why it lives in config rather than in
+	// memory: the whole point of a recents list is that it survives a
+	// restart. Load drops entries that are no longer directories, so a
+	// deleted or unmounted project cannot sit in the picker forever.
+	RecentRoots []string
 }
+
+// maxRecentRoots caps the remembered-roots list. Ten fits in the picker
+// without scrolling and is well past the number of projects anyone switches
+// between in a session; a short list also keeps the rewrite-on-every-switch
+// cheap.
+const maxRecentRoots = 10
 
 // Defaults returns a Config populated with the values used when no
 // config file is present (or every field in it is blank). Centralised
 // so tests and the loader can't drift from each other.
 func Defaults() Config {
-	return Config{Icons: IconsAuto, TabBar: false}
+	return Config{Icons: IconsAuto, TabBar: false, RecentRoots: nil}
 }
 
 // fileFormat mirrors the on-disk JSON shape. We decode into this and
 // then promote into Config so the public type doesn't have to carry
 // JSON tags or pointer fields just for "field was absent" detection.
 type fileFormat struct {
-	Icons  string `json:"icons,omitempty"`
-	TabBar bool   `json:"tabBar,omitempty"`
+	Icons       string   `json:"icons,omitempty"`
+	TabBar      bool     `json:"tabBar,omitempty"`
+	RecentRoots []string `json:"recentRoots,omitempty"`
 }
 
 // DefaultPath returns the canonical config-file location:
@@ -139,5 +157,143 @@ func Load(path string) (Config, error) {
 		)
 	}
 	cfg.TabBar = ff.TabBar
+	cfg.RecentRoots = cleanRecentRoots(ff.RecentRoots)
 	return cfg, nil
+}
+
+// cleanRecentRoots normalises the raw recentRoots array read off disk:
+// absolute, cleaned, de-duplicated, capped at maxRecentRoots, and with
+// anything that is no longer a directory dropped.
+//
+// The drop is the interesting half. A recents list is a list of promises —
+// every entry claims "clicking me will work" — and a stale entry breaks
+// that promise at the worst moment, when the user is trying to get
+// somewhere. Filtering on load costs one Stat per entry (ten, once, at
+// startup) and means the picker never offers a folder that has been
+// deleted, renamed, or unmounted.
+func cleanRecentRoots(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		abs = filepath.Clean(abs)
+		if seen[abs] {
+			continue
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		seen[abs] = true
+		out = append(out, abs)
+		if len(out) == maxRecentRoots {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// AddRecentRoot moves path to the front of c.RecentRoots, de-duplicating and
+// capping the list. It is a method on *Config rather than a helper in the app
+// package because "most recent first, no repeats, at most ten" is part of the
+// field's contract, and a second copy of that rule in the caller is how the
+// on-disk list ends up with duplicates.
+//
+// Unlike Load's cleanRecentRoots this does NOT Stat the path: the caller is
+// recording a root it has just successfully switched to, so the directory
+// demonstrably exists, and a Stat here would only add a failure mode.
+func (c *Config) AddRecentRoot(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	path = filepath.Clean(path)
+	out := make([]string, 0, len(c.RecentRoots)+1)
+	out = append(out, path)
+	for _, p := range c.RecentRoots {
+		if p == path {
+			continue
+		}
+		out = append(out, p)
+		if len(out) == maxRecentRoots {
+			break
+		}
+	}
+	c.RecentRoots = out
+}
+
+// Save writes cfg back to path, creating the parent directory if needed.
+//
+// The write is atomic — a temp file in the same directory, then a rename —
+// because this runs on every root switch, and a half-written config.json is
+// one Load will reject with a parse error on the next launch. Same directory
+// matters: a rename across filesystems is not atomic, and on Windows not
+// even permitted, so the temp file cannot live in TempDir.
+//
+// path == "" is a silent no-op, matching Load's "no config configured"
+// contract — a machine where DefaultPath cannot resolve a home directory
+// should not start erroring on every root switch.
+//
+// Every field is written, including ones the user had omitted. That is
+// deliberate: an omitted field and its default are the same config, and
+// round-tripping through Config is what keeps Save from having to know
+// which keys were present in the file it is replacing.
+func Save(path string, cfg Config) error {
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	mode := cfg.Icons
+	if mode == "" {
+		mode = IconsAuto
+	}
+	data, err := json.MarshalIndent(fileFormat{
+		Icons:       string(mode),
+		TabBar:      cfg.TabBar,
+		RecentRoots: cfg.RecentRoots,
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", path, err)
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(dir, ".config.json.*")
+	if err != nil {
+		return fmt.Errorf("create temp in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup: after a successful rename the temp file is gone
+	// and the Remove fails harmlessly; after any failure below it is what
+	// stops a stray dotfile accumulating next to the config.
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", tmpName, path, err)
+	}
+	return nil
 }

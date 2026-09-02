@@ -16,6 +16,7 @@
 package app
 
 import (
+	"path/filepath"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -69,6 +70,10 @@ func (a *App) closeAllModals() {
 	a.findOpen = false
 	a.finderOpen = false
 	a.pickerOpen = false
+	// resetRootPicker rather than a bare flag clear: it preserves the
+	// closedAt stamp that makes Esc-o-while-open mean "browse the
+	// machine". See rootpicker.go.
+	a.resetRootPicker()
 	a.pickerTargets = nil
 	a.pickerText = ""
 	a.findValue = nil
@@ -101,7 +106,7 @@ func (a *App) closeAllModals() {
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
 	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
-		a.findOpen || a.finderOpen || a.pickerOpen
+		a.findOpen || a.finderOpen || a.pickerOpen || a.rootPicker.open
 }
 
 // -----------------------------------------------------------------------------
@@ -966,6 +971,15 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	}
 	items = append(items, contextItem{label: "Copy rel path", action: ctxCopyRelativePath})
 	items = append(items, contextItem{label: "Copy abs path", action: ctxCopyAbsolutePath})
+	// Root switching. "Set as root" is folders only — it is the one-click
+	// version of the picker for a folder the user can already see — and
+	// "Change root…" opens the picker itself, which is why it is offered
+	// on every node. Both mirror the Esc-o leader (leader.go), so neither
+	// lives only behind a right-click.
+	if n != nil && n.IsDir && filepath.Clean(n.Path) != filepath.Clean(a.rootDir) {
+		items = append(items, contextItem{label: "Set as root", action: ctxSetAsRoot})
+	}
+	items = append(items, contextItem{label: "Change root…", action: ctxChangeRoot})
 
 	a.contextNode = n
 	a.contextItems = items
