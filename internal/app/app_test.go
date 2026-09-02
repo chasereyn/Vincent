@@ -1266,6 +1266,96 @@ func TestTabBarClick_ClosesViaX(t *testing.T) {
 	}
 }
 
+// TestLeaderHint_CoversEveryBindingWithNoStaleText is the test the old
+// hardcoded status line needed and never had. That string still said
+// "f find · t tree" two renames after f became the file explorer and /
+// became find — the one piece of UI whose entire job is saying what the
+// keys are was naming the wrong keys. Generating it from leaderRows makes
+// that impossible; this pins it.
+func TestLeaderHint_CoversEveryBindingWithNoStaleText(t *testing.T) {
+	hint := leaderHint()
+
+	if !strings.HasPrefix(hint, " Esc — ") {
+		t.Fatalf("hint should lead with the armed-leader prefix: %q", hint)
+	}
+	for _, b := range leaderBindings() {
+		want := string(b.key) + " " + b.hint
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint is missing %q\nhint: %q", want, hint)
+		}
+	}
+	for _, b := range leaderKeyBindings() {
+		want := b.label + " " + b.hint
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint is missing the named-key entry %q\nhint: %q", want, hint)
+		}
+	}
+	// The separator count proves nothing was silently concatenated: N
+	// entries carry N-1 middle dots.
+	if got, want := strings.Count(hint, " · "), len(leaderRows())-1; got != want {
+		t.Fatalf("hint has %d separators, want %d", got, want)
+	}
+	// Stale text from the hardcoded version. "f find" and "t tree" were
+	// both wrong by the time it was deleted; "m menu" names a binding that
+	// no longer exists.
+	for _, stale := range []string{"f find", "t tree", "m menu", "y copy ·"} {
+		if strings.Contains(hint, stale) {
+			t.Fatalf("hint still carries stale text %q: %q", stale, hint)
+		}
+	}
+}
+
+// TestLeaderHint_UnboundRunesAreAbsent is the other half: a rune that is
+// not in the table must not appear as a key label, or the hint promises a
+// binding that does nothing.
+func TestLeaderHint_UnboundRunesAreAbsent(t *testing.T) {
+	bound := map[rune]bool{}
+	for _, b := range leaderBindings() {
+		bound[b.key] = true
+	}
+	hint := leaderHint()
+	for _, r := range "bcehijklmnovxBCD" {
+		if bound[r] {
+			continue // a later pass may legitimately bind it
+		}
+		if strings.Contains(hint, " "+string(r)+" ") {
+			t.Fatalf("hint advertises unbound key %q: %q", string(r), hint)
+		}
+	}
+}
+
+// TestDrawStatusBar_ArmedLeaderShowsTheKeyTable proves the generated hint
+// actually reaches the bottom row, truncated to the space it has rather
+// than spilling over the branch label on its right.
+func TestDrawStatusBar_ArmedLeaderShowsTheKeyTable(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.gitBranch = "main"
+	a.lastEscape = time.Now()
+	if !a.leaderArmed() {
+		t.Fatal("fixture failed to arm the leader")
+	}
+	a.draw()
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	_, sy, _, _ := a.statusRect()
+	var row strings.Builder
+	for x := 0; x < w; x++ {
+		row.WriteString(string(cells[sy*w+x].Runes))
+	}
+	got := row.String()
+
+	// The head of the table is what survives truncation on any window.
+	if !strings.Contains(got, "Esc — d diff") {
+		t.Fatalf("status row is missing the armed-leader head: %q", got)
+	}
+	// The branch label still owns the right edge.
+	if !strings.HasSuffix(strings.TrimRight(got, " "), "main") {
+		t.Fatalf("armed hint overran the branch label: %q", got)
+	}
+}
+
 // TestDrawStatusBar_RendersBranchRightAligned pins down the lower-right
 // branch label: when gitBranch is set, the rightmost cells of the
 // status bar carry " <branch> " in order, so the user can glance at

@@ -101,7 +101,46 @@ func TestLeaderArmed_WindowIsGenerous(t *testing.T) {
 // was invisible state before: press Esc, nothing appears to happen, and
 // whether the next key is a command or a keystroke depends on a timer you
 // cannot see.
+//
+// The screen is widened to 200 columns because the hint is now generated
+// from the whole leader table and truncated to fit: at the fixture's
+// default 120 the tail (w close · q quit · ? keys) legitimately falls off
+// the end. 200 is the width Vincent actually runs at — it gets a monitor
+// of its own — and it is the only width at which "every binding reached
+// the bar" is a claim the bar can satisfy.
 func TestStatusBar_ShowsTheLeaderHint(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.SetSize(200, 40)
+	a.width, a.height = scr.Size()
+	a.lastEscape = time.Now()
+	a.draw()
+	scr.Show()
+
+	cells, w, _ := scr.GetContents()
+	_, sy, _, _ := a.statusRect()
+	row := make([]rune, 0, w)
+	for x := 0; x < w; x++ {
+		c := cells[sy*w+x]
+		if len(c.Runes) == 0 {
+			row = append(row, ' ')
+			continue
+		}
+		row = append(row, c.Runes[0])
+	}
+	got := string(row)
+	for _, want := range []string{"Esc", "d diff", "q quit", "? keys"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status bar = %q, want it to mention %q", got, want)
+		}
+	}
+}
+
+// TestStatusBar_LeaderHintTruncatesWithEllipsis covers the narrow case the
+// test above deliberately steps around: the hint is longer than a 120-cell
+// bar, so it has to be cut with a visible ellipsis rather than silently
+// clipped mid-word or drawn over the branch label.
+func TestStatusBar_LeaderHintTruncatesWithEllipsis(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.lastEscape = time.Now()
 	a.draw()
@@ -120,9 +159,16 @@ func TestStatusBar_ShowsTheLeaderHint(t *testing.T) {
 		row = append(row, c.Runes[0])
 	}
 	got := string(row)
-	for _, want := range []string{"Esc", "q quit"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("status bar = %q, want it to mention %q", got, want)
-		}
+
+	if len([]rune(leaderHint())) <= w {
+		t.Skip("leader table now fits in 120 cells — nothing to truncate")
+	}
+	if !strings.Contains(got, "…") {
+		t.Fatalf("truncated hint should end in an ellipsis: %q", got)
+	}
+	// The head is what has to survive: review bindings lead the table
+	// precisely so the tail is what gets dropped.
+	if !strings.Contains(got, "Esc — d diff · r note") {
+		t.Fatalf("truncation ate the head of the table: %q", got)
 	}
 }

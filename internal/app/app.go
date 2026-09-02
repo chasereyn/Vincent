@@ -1954,6 +1954,31 @@ func (a *App) leaderArmed() bool {
 	return !a.lastEscape.IsZero() && time.Since(a.lastEscape) < doubleEscMs
 }
 
+// leaderHint builds the armed-leader line for the status bar: "Esc — "
+// followed by every binding as "<key> <hint>", middle-dot separated, in
+// leaderRows order.
+//
+// Generated rather than written out because the hand-written version went
+// stale exactly the way you would expect — it still said "f find · t tree"
+// two renames after f became the file explorer and / became find, so the
+// one piece of UI whose whole job is telling you what the keys are was
+// telling you the wrong keys. The caller truncates it to the width it has,
+// which is why leaderRows puts the review bindings first: on a narrow
+// terminal the tail is what gets dropped.
+func leaderHint() string {
+	var b strings.Builder
+	b.WriteString(" Esc — ")
+	for i, r := range leaderRows() {
+		if i > 0 {
+			b.WriteString(" · ")
+		}
+		b.WriteString(r.key)
+		b.WriteByte(' ')
+		b.WriteString(r.hint)
+	}
+	return b.String()
+}
+
 // hasTab reports whether there is an active tab to act on.
 func (a *App) hasTab() bool { return a.activeTabPtr() != nil }
 
@@ -2542,7 +2567,8 @@ func (a *App) drawStatusBar() {
 	// on a timer you cannot see.
 	var left string
 	if a.leaderArmed() {
-		drawStatusText(a.screen, sx, sy, sw-rightWidth, " Esc — d diff · r note · ⏎ send · y copy · g changes · p find file · f find · t tree · w close · q quit", style)
+		max := sw - rightWidth
+		drawStatusText(a.screen, sx, sy, max, trimRunes(leaderHint(), max), style)
 		return
 	}
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {
