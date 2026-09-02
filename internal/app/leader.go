@@ -64,6 +64,10 @@ func leaderBindings() []leaderBinding {
 		{'g', (*App).menuToggleGitPanel},
 		{'m', (*App).openMenu},
 		{'t', (*App).menuToggleTabBar},
+		// 'o' is "open a different root" — the folder switcher. Pressed a
+		// second time while the picker is up it flips to browsing the
+		// filesystem, which is the two-gesture shape the owner asked for.
+		{'o', (*App).openRootPicker},
 	}
 }
 

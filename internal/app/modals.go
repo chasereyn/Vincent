@@ -69,6 +69,10 @@ func (a *App) closeAllModals() {
 	a.findOpen = false
 	a.finderOpen = false
 	a.pickerOpen = false
+	// resetRootPicker rather than a bare flag clear: it preserves the
+	// closedAt stamp that makes Esc-o-while-open mean "browse the
+	// machine". See rootpicker.go.
+	a.resetRootPicker()
 	a.pickerTargets = nil
 	a.pickerText = ""
 	a.findValue = nil
@@ -101,7 +105,7 @@ func (a *App) closeAllModals() {
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
 	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
-		a.findOpen || a.finderOpen || a.pickerOpen
+		a.findOpen || a.finderOpen || a.pickerOpen || a.rootPicker.open
 }
 
 // -----------------------------------------------------------------------------
