@@ -792,7 +792,7 @@ func (a *App) drawGitPanelReview(x, y, w, rows int) {
 	}
 
 	if a.reviewBatch.Len() == 0 {
-		drawClipped(a.screen, x+1, y, w-1, "No review notes · Esc r on a diff line", base.Foreground(th.Subtle))
+		drawClipped(a.screen, x+1, y, w-1, "No review notes · Esc r on a diff line", base.Foreground(th.DimText))
 		return
 	}
 
@@ -827,7 +827,7 @@ func (a *App) drawGitPanelReview(x, y, w, rows int) {
 	}
 	if rest := a.reviewBatch.Len() - shown; rest > 0 {
 		drawClipped(a.screen, x+gitPanelIndent, cy, w-gitPanelIndent-1,
-			fmt.Sprintf("+%d more", rest), base.Foreground(th.Subtle))
+			fmt.Sprintf("+%d more", rest), base.Foreground(th.DimText))
 		cy++
 	}
 

@@ -355,7 +355,7 @@ func (a *App) drawGitPanelList(x, y, w, h int) {
 	// that continues below the fold looks like the whole story — and "the
 	// whole story" is exactly the claim a review tool must not make falsely.
 	if a.gitPanelScroll+h < len(items) {
-		drawClipped(a.screen, x+1, y+h-1, w-1, "⋯ more", base.Foreground(th.Subtle))
+		drawClipped(a.screen, x+1, y+h-1, w-1, "⋯ more", base.Foreground(th.DimText))
 	}
 }
 
@@ -399,7 +399,7 @@ func (a *App) drawGitPanelRow(x, cy, w int, e gitEntry) {
 	if rest < 4 {
 		return
 	}
-	drawClipped(a.screen, startX+used+1, cy, rest, truncateLeft(e.Dir, rest), base.Foreground(th.Subtle))
+	drawClipped(a.screen, startX+used+1, cy, rest, truncateLeft(e.Dir, rest), base.Foreground(th.DimText))
 }
 
 // gitPanelFooterH is the height of the whole footer block: the rule and

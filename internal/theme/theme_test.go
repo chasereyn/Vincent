@@ -40,6 +40,7 @@ func TestDefault_AllColorsSet(t *testing.T) {
 		{"Text", th.Text},
 		{"Muted", th.Muted},
 		{"Subtle", th.Subtle},
+		{"DimText", th.DimText},
 		{"Accent", th.Accent},
 		{"AccentSoft", th.AccentSoft},
 		{"Selection", th.Selection},

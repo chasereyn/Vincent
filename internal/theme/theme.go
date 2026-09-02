@@ -29,15 +29,17 @@ type Theme struct {
 	// --- Foregrounds & accents ---
 	Text  tcell.Color // Primary editor text.
 	Muted tcell.Color // Line numbers, inactive tabs, secondary UI text.
-	// Subtle draws two different jobs on one field: structural borders
-	// (splitters, modal frames, rule lines) and dim-but-still-words text
-	// (the Changes panel's "⋯ more", its dimmed parent-directory suffix,
-	// indent guides). Chase found the words too dark to read; Subtle was
-	// raised to keep 7:1+ contrast on #030405 for that reason, which also
-	// brightens the borders it shares the field with — there's no second
-	// field for internal/app's border call sites to switch to. See
-	// Default's doc comment for the exact value and the contrast math.
-	Subtle      tcell.Color
+	// Subtle is structure, not words: splitters, modal frames, rule lines,
+	// indent guides, the gap glyph in a diff. It stays dark on purpose so
+	// the chrome recedes. Anything a person is meant to READ in a dim tone
+	// uses DimText below — the two were one field until 2026-09-02, when
+	// raising it for the Changes panel's parent-directory text would have
+	// lit up every border in the app.
+	Subtle tcell.Color
+	// DimText is dim-but-readable words: the Changes panel's parent-directory
+	// suffix and its "⋯ more" hint, the review footer's placeholder and
+	// "+N more". Above 7:1 on #030405 so it never disappears.
+	DimText     tcell.Color
 	Accent      tcell.Color // Active tab accent, root label, important UI.
 	AccentSoft  tcell.Color // Softer accent (active line number).
 	Selection   tcell.Color // Selection background.
@@ -170,16 +172,13 @@ type Theme struct {
 //     tcell.ColorDefault, which would inherit whatever the host terminal
 //     is using and would not reliably match Ghostty's #030405.
 //
-// Muted (#c3c2be -> #d2d1cd) and Subtle (#2d2f34 -> #969aa0) were both
-// raised on 2026-09-02: Chase, reading a real Ghostty window instead of
-// the roadmap's colour table, called the tree and Changes-panel text "a
-// little bit brighter" than he wanted. Both moves keep the WCAG contrast
-// ratio against #030405 above 7:1 for anything that renders as words
-// (Muted 13.4:1, Subtle 7.7:1) — Subtle's old #2d2f34 was 1.5:1, unreadable
-// as text and fine only for the border/rule job it was originally scoped
-// to before the Changes panel and the review composer started drawing
-// hint text in it too. FileColor, syntax colours, git-status colours, and
-// every background stayed put; only these two moved.
+// Muted was raised #c3c2be -> #d2d1cd on 2026-09-02: Chase, reading a real
+// Ghostty window, found the tree and Changes-panel text too dark. The dim
+// words in the Changes panel and review footer moved off Subtle onto the
+// new DimText (#969aa0, 7.7:1 on #030405) at the same time; Subtle itself
+// stays at #2d2f34 because it is borders and guides, which should recede.
+// FileColor, syntax colours, git-status colours, and every background
+// stayed put.
 func Default() Theme {
 	return Theme{
 		// Surfaces — Ghostty's ground. See the note above.
@@ -189,11 +188,12 @@ func Default() Theme {
 		// The active line's background, from Chase's Zed settings.
 		LineHL: tcell.NewRGBColor(0x18, 0x1a, 0x1e),
 
-		// Foregrounds & accents. Muted and Subtle both raised 2026-09-02 —
-		// see the doc comment above for the contrast math.
-		Text:   tcell.NewRGBColor(0xdf, 0xde, 0xda),
-		Muted:  tcell.NewRGBColor(0xd2, 0xd1, 0xcd),
-		Subtle: tcell.NewRGBColor(0x96, 0x9a, 0xa0),
+		// Foregrounds & accents. Muted raised 2026-09-02 — see the doc
+		// comment above.
+		Text:    tcell.NewRGBColor(0xdf, 0xde, 0xda),
+		Muted:   tcell.NewRGBColor(0xd2, 0xd1, 0xcd),
+		Subtle:  tcell.NewRGBColor(0x2d, 0x2f, 0x34),
+		DimText: tcell.NewRGBColor(0x96, 0x9a, 0xa0),
 		// StatusFG replaces the old inverted status bar. spice-edit drew
 		// theme.BG on a solid blue StatusBG; with a near-black StatusBG
 		// that would be nearly black-on-black, so the bar draws accent
