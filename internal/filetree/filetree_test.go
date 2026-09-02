@@ -1052,6 +1052,78 @@ func TestRender_IconsEnabledFolderOpenSwitches(t *testing.T) {
 	}
 }
 
+// TestRender_IconsEnabledFolderHasNoChevron pins the neo-tree / lazyvim
+// shape Chase asked for: with icons on, a folder's glyph REPLACES the
+// chevron rather than sitting beside it, so a folder row must carry
+// exactly one of '›'/'⌄' or the folder glyph, never both. Without this
+// check a regression could silently reintroduce "› " next to the glyph
+// and nobody would notice since the glyph-presence tests above would
+// still pass.
+func TestRender_IconsEnabledFolderHasNoChevron(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.IconsEnabled = true
+	alpha := findChild(tr.Root, "alpha")
+
+	// Collapsed alpha: glyph present, no chevron.
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "alpha")
+	if rowY < 0 {
+		t.Fatal("could not find alpha row (collapsed)")
+	}
+	collapsed := rowText(cells, w, rowY)
+	if containsRune(collapsed, "›") || containsRune(collapsed, "⌄") {
+		t.Fatalf("collapsed alpha row with icons on should have no chevron: %q", collapsed)
+	}
+	if !containsRune(collapsed, icons.FolderClosed) {
+		t.Fatalf("collapsed alpha row missing FolderClosed glyph: %q", collapsed)
+	}
+
+	// Expanded alpha: still no chevron, now the open glyph.
+	tr.Toggle(alpha)
+	cells, w = renderAndCollect(t, tr, 40, 20)
+	rowY = findRowY(cells, w, 20, "alpha")
+	if rowY < 0 {
+		t.Fatal("could not find alpha row (expanded)")
+	}
+	expanded := rowText(cells, w, rowY)
+	if containsRune(expanded, "›") || containsRune(expanded, "⌄") {
+		t.Fatalf("expanded alpha row with icons on should have no chevron: %q", expanded)
+	}
+	if !containsRune(expanded, icons.FolderOpen) {
+		t.Fatalf("expanded alpha row missing FolderOpen glyph: %q", expanded)
+	}
+}
+
+// TestRender_IconsDisabledFolderKeepsChevron is the mirror check: with
+// icons off, the folder glyph must NOT appear and the legacy chevron must
+// still be there exactly as before this pass — CLAUDE.md is explicit that
+// the no-Nerd-Font fallback look must not regress.
+func TestRender_IconsDisabledFolderKeepsChevron(t *testing.T) {
+	root := mkTree(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// IconsEnabled left at its zero value (false).
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	rowY := findRowY(cells, w, 20, "Beta") // collapsed
+	if rowY < 0 {
+		t.Fatal("could not find Beta row")
+	}
+	row := rowText(cells, w, rowY)
+	if !containsRune(row, "›") {
+		t.Fatalf("collapsed Beta row with icons off should keep '›': %q", row)
+	}
+	if containsRune(row, icons.FolderClosed) {
+		t.Fatalf("collapsed Beta row with icons off should not show the folder glyph: %q", row)
+	}
+}
+
 // mkNested builds a deeper layout than mkTree so Reveal has a real ancestor
 // chain to walk. The shape:
 //

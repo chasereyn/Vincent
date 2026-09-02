@@ -339,15 +339,18 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 // fill Render painted before calling this) — every style drawn here has to
 // use it rather than assume SidebarBG, or a hovered/selected row would show
 // through as sidebar-coloured text on a highlighted background.
-// withIcons=true prefixes the name with a Nerd Font glyph + space; off
-// renders the legacy chevron-only look for terminals that can't show
-// the private-use glyphs.
+// withIcons=true prefixes the name with a Nerd Font glyph; off renders the
+// legacy chevron-only look for terminals that can't show the private-use
+// glyphs.
 //
-// When icons are enabled the row is rendered in four segments (indent →
-// chevron → glyph → name) so the glyph can take its own per-language
-// colour while the name keeps the row's normal fg/dirty/active styling.
-// That's the visual cue you find in nvim-tree and friends: a quick
-// eye-scan picks out Go from Ruby from Markdown without reading any text.
+// When icons are enabled a directory's glyph REPLACES the chevron rather
+// than sitting beside it — icons.FolderClosed/FolderOpen (the neo-tree /
+// lazyvim folder pair) already carry the open/closed state, so a chevron
+// next to them would just repeat the same information. A file has no
+// chevron to replace; its glyph is inserted before the name exactly as
+// before. That's the visual cue you find in nvim-tree and friends: a quick
+// eye-scan picks out Go from Ruby from Markdown, and open from closed
+// folders, without reading any text.
 func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool, bg tcell.Color) {
 	// Compute the row-level foreground via this priority cascade
 	// (highest wins last):
@@ -401,12 +404,16 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 
 	var chevOrBlank, suffix string
 	if item.Node.IsDir {
-		chev := "›"
-		if item.Node.Expanded {
-			chev = "⌄"
-		}
-		chevOrBlank = chev + " "
 		suffix = item.Node.Name + "/"
+		if !withIcons {
+			chev := "›"
+			if item.Node.Expanded {
+				chev = "⌄"
+			}
+			chevOrBlank = chev + " "
+		}
+		// withIcons: leave chevOrBlank empty — the folder glyph below
+		// takes this slot instead of sitting beside the chevron.
 	} else {
 		chevOrBlank = "  "
 		suffix = item.Node.Name
@@ -423,7 +430,9 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	glyphFg := icons.ColorFor(item.Node.Name, item.Node.IsDir, fg)
 	// Dirty files keep their per-language glyph colour — the language
 	// hue is the at-a-glance cue, and the name turning Modified is
-	// already enough to flag "this is dirty".
+	// already enough to flag "this is dirty". Folders take the row's own
+	// fg (ColorFor's fallback for isDir), so the folder glyph matches the
+	// name's colour exactly — active/dirty/muted all still apply to it.
 	glyphStyle := tcell.StyleDefault.Background(bg).Foreground(glyphFg)
 	if active {
 		glyphStyle = glyphStyle.Bold(true)
@@ -431,7 +440,16 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 
 	drawString(scr, col, y, remaining(), glyph, glyphStyle)
 	col += runeLen(glyph)
-	drawString(scr, col, y, remaining(), "  "+suffix, rowStyle)
+	// A folder's glyph already occupies the chevron's old column, so it
+	// only needs a single space before the name — matching the chevron's
+	// original "chev + one space" width. A file's glyph is new real
+	// estate beside its existing two-space chevron gutter, so it keeps
+	// the wider two-space gap that look was tuned with.
+	sep := "  "
+	if item.Node.IsDir {
+		sep = " "
+	}
+	drawString(scr, col, y, remaining(), sep+suffix, rowStyle)
 }
 
 // runeLen returns the visible cell count of s (one cell per rune) — used to

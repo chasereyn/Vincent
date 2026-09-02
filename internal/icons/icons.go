@@ -210,13 +210,14 @@ func walkForNerdFont(root string) bool {
 }
 
 // FolderClosed and FolderOpen are the two folder glyphs the file tree
-// uses, paired with the existing chevron so the row reads as
-// "▸  fileName" or "▾  folderName/" with proper indent. Exported so
-// the renderer can use them directly without going through For().
+// draws in place of the chevron when icons are enabled -- the neo-tree /
+// lazyvim look Chase asked for, rather than a chevron plus a generic
+// folder pairing. Exported so the renderer can use them directly without
+// going through For().
 const (
-	FolderClosed = "" //  - generic closed folder (nf-fa-folder)
-	FolderOpen   = "" //  - generic open folder (nf-fa-folder_open)
-	FileDefault  = "" //  - generic file (nf-fa-file)
+	FolderClosed = "\ue5ff" //  - nf-custom-folder
+	FolderOpen   = "\ue5fe" //  - nf-custom-folder_open
+	FileDefault  = "\uf15b" //  - generic file (nf-fa-file)
 )
 
 // extIcons maps lowercase file extensions (with leading dot) to their
