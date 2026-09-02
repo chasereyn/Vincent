@@ -1312,3 +1312,180 @@ func TestFlatIndexOf_MatchesRenderOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestCollapseAll_FoldsTwoOpenLevels is the headline case: a tree opened
+// two directories deep (which is what Reveal leaves behind after a session
+// of opening files from the Changes panel) folds back to its top-level
+// listing, and nothing below the root is left expanded.
+func TestCollapseAll_FoldsTwoOpenLevels(t *testing.T) {
+	root := mkNested(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	deep := filepath.Join(root, "a", "b", "deep.go")
+	tr.Reveal(deep, 20)
+
+	a := findChild(tr.Root, "a")
+	b := findChild(a, "b")
+	if a == nil || b == nil || !a.Expanded || !b.Expanded {
+		t.Fatal("fixture failed: both levels should be open before the fold")
+	}
+
+	tr.CollapseAll()
+
+	if a.Expanded {
+		t.Error("a should be collapsed")
+	}
+	if b.Expanded {
+		t.Error("b should be collapsed")
+	}
+	if !tr.Root.Expanded {
+		t.Error("the root row is a header, not a collapsible node — it stays expanded")
+	}
+	// Children stay loaded: collapsing is a display decision, and dropping
+	// them would mean re-reading every directory on the next expand.
+	if !a.Loaded || !b.Loaded {
+		t.Error("CollapseAll must not unload children")
+	}
+	if len(b.Children) == 0 {
+		t.Error("b's children were thrown away")
+	}
+}
+
+// TestCollapseAll_LeavesOnlyRootChildrenVisible checks the fold through the
+// renderer rather than through the Expanded flags, because "no folder is
+// expanded" and "the sidebar shows one row per top-level entry" are
+// different claims and it is the second one the user sees.
+func TestCollapseAll_LeavesOnlyRootChildrenVisible(t *testing.T) {
+	root := mkNested(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.Reveal(filepath.Join(root, "a", "b", "deep.go"), 20)
+
+	scr := tcell.NewSimulationScreen("UTF-8")
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	defer scr.Fini()
+	scr.SetSize(40, 24)
+
+	tr.Render(scr, theme.Default(), 0, 0, 40, 24)
+	before := countRows(tr)
+
+	tr.CollapseAll()
+	tr.Render(scr, theme.Default(), 0, 0, 40, 24)
+	after := countRows(tr)
+
+	if want := len(tr.Root.Children); after != want {
+		t.Fatalf("after the fold %d rows are visible, want %d (one per top-level entry)", after, want)
+	}
+	if after >= before {
+		t.Fatalf("the fold did not shorten the list: %d rows before, %d after", before, after)
+	}
+}
+
+// countRows counts the non-nil rows the last Render recorded — the rows a
+// click could actually land on.
+func countRows(tr *Tree) int {
+	n := 0
+	for _, node := range tr.visible {
+		if node != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// TestCollapseAll_MovesActiveFolderToVisibleAncestor pins the selection
+// half: the active folder was three levels down and its row is gone, so it
+// moves up to the nearest row the fold left on screen. Leaving it pointing
+// at a collapsed node means the highlight is simply invisible, and the user
+// cannot tell where they are.
+func TestCollapseAll_MovesActiveFolderToVisibleAncestor(t *testing.T) {
+	root := mkNested(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.Reveal(filepath.Join(root, "a", "b", "deep.go"), 20)
+	tr.ActiveFolder = filepath.Join(root, "a", "b")
+
+	tr.CollapseAll()
+
+	if want := filepath.Join(root, "a"); tr.ActiveFolder != want {
+		t.Fatalf("ActiveFolder = %q, want %q (the nearest still-visible ancestor)", tr.ActiveFolder, want)
+	}
+}
+
+// TestCollapseAll_ResetsScrollAndHover covers the two bits of viewport
+// state. A fold-all is a "take me back to the top" gesture, and a hover row
+// recorded against the old, longer list would light the wrong row.
+func TestCollapseAll_ResetsScrollAndHover(t *testing.T) {
+	root := mkNested(t)
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.Reveal(filepath.Join(root, "a", "b", "deep.go"), 3)
+	tr.ScrollY = 4
+	tr.SetHover(5)
+
+	tr.CollapseAll()
+
+	if tr.ScrollY != 0 {
+		t.Errorf("ScrollY = %d, want 0", tr.ScrollY)
+	}
+	if tr.HoverY != -1 {
+		t.Errorf("HoverY = %d, want -1", tr.HoverY)
+	}
+}
+
+// TestCollapseAll_ActiveFolderCases covers the paths visibleDirFor has to
+// get right without walking off the tree: an already-visible top-level
+// folder stays put, the root stays the root, an empty value stays empty,
+// and a path outside the tree falls back to the root rather than naming a
+// node with no row.
+func TestCollapseAll_ActiveFolderCases(t *testing.T) {
+	root := mkNested(t)
+	outside := t.TempDir()
+
+	cases := []struct {
+		name   string
+		active string
+		want   string
+	}{
+		{"top level folder stays", filepath.Join(root, "a"), filepath.Join(root, "a")},
+		{"root stays root", root, root},
+		{"empty stays empty", "", ""},
+		{"outside the tree falls back to root", filepath.Join(outside, "elsewhere"), root},
+		{"a file path resolves to its visible folder", filepath.Join(root, "a", "b", "deep.go"), filepath.Join(root, "a")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, err := New(root)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			tr.Reveal(filepath.Join(root, "a", "b", "deep.go"), 20)
+			tr.ActiveFolder = tc.active
+
+			tr.CollapseAll()
+
+			if tr.ActiveFolder != tc.want {
+				t.Fatalf("ActiveFolder = %q, want %q", tr.ActiveFolder, tc.want)
+			}
+		})
+	}
+}
+
+// TestCollapseAll_NilRootIsNoop guards the single-file-mode shape. App
+// guards on a nil tree, but a nil Root inside a live Tree must not panic
+// either.
+func TestCollapseAll_NilRootIsNoop(t *testing.T) {
+	tr := &Tree{HoverY: -1}
+	tr.CollapseAll()
+}

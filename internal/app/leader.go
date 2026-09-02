@@ -86,6 +86,7 @@ func leaderBindings() []leaderBinding {
 		// View
 		{'f', "explorer", leaderGroupView, (*App).menuToggleSidebar},
 		{'t', "tab bar", leaderGroupView, (*App).menuToggleTabBar},
+		{'z', "fold all", leaderGroupView, (*App).menuCollapseTree},
 		// Edit
 		{'s', "save", leaderGroupEdit, (*App).menuSave},
 		{'u', "undo", leaderGroupEdit, (*App).menuUndo},

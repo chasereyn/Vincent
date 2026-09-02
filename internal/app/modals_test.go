@@ -448,7 +448,7 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 
 	// Read-only entries only. "View diff" is a file-only addition from
 	// phase 1; nothing here creates, renames, or deletes anything.
-	copyLabels := []string{"Copy rel path", "Copy abs path"}
+	copyLabels := []string{"Copy rel path", "Copy abs path", "Collapse all folders"}
 	cases := []struct {
 		name string
 		node *filetree.Node
@@ -472,6 +472,50 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 				t.Fatalf("%s item %d label: got %q, want %q", tc.name, i, a.contextItems[i].label, w)
 			}
 		}
+	}
+}
+
+// TestTreeContext_CollapseAllFolders runs the row, not just its label:
+// "Collapse all folders" is node-free (it uses contextItem.plain), and a
+// node-free row that was written with the node-taking `action` field
+// silently does nothing, because contextActivate gates action on a
+// non-nil node.
+func TestTreeContext_CollapseAllFolders(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeFile(filepath.Join(nested, "deep.txt"), "x"); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(nested, "deep.txt"))
+
+	outer := a.tree.Root.Children[0]
+	if !outer.IsDir || !outer.Expanded {
+		t.Fatalf("fixture: expected an expanded top-level folder, got %+v", outer)
+	}
+
+	a.openTreeContext(outer, 5, 5)
+	idx := -1
+	for i, it := range a.contextItems {
+		if it.label == "Collapse all folders" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("tree context menu has no Collapse all folders row: %v", a.contextItems)
+	}
+	a.contextHover = idx
+	a.contextActivate()
+
+	if outer.Expanded {
+		t.Fatal("the context row did not fold the tree")
+	}
+	if a.contextOpen {
+		t.Fatal("activating a row should close the context menu")
 	}
 }
 

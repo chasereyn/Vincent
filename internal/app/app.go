@@ -2163,6 +2163,23 @@ func (a *App) menuToggleSidebar() {
 	a.sidebarShown = !a.sidebarShown
 }
 
+// menuCollapseTree folds every folder in the file tree back to the root.
+// Bound to Esc z and offered on a tree row's right-click.
+//
+// Reviewing agent work expands the tree behind your back: every file
+// opened from the Changes panel or the finder calls Tree.Reveal, which
+// expands its ancestors, so after twenty minutes the sidebar is a long
+// ragged column shaped like your history rather than like the project.
+// This is the one key that gets the shape back.
+func (a *App) menuCollapseTree() {
+	if a.tree == nil {
+		a.flash("No file explorer in single-file mode")
+		return
+	}
+	a.tree.CollapseAll()
+	a.flash("Folded all folders")
+}
+
 // sidebarToggleLabel returns the label the toggle row should display given
 // the current sidebar state. Drawn dynamically by drawMenu.
 func (a *App) sidebarToggleLabel() string {

@@ -968,6 +968,11 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 	}
 	items = append(items, contextItem{label: "Copy rel path", action: ctxCopyRelativePath})
 	items = append(items, contextItem{label: "Copy abs path", action: ctxCopyAbsolutePath})
+	// Node-free: folding the whole tree has nothing to do with the row you
+	// happened to right-click, so it takes the plain variant. Offered here
+	// as well as on Esc z because the tree is a mouse surface — you are
+	// already pointing at it when you decide it has got too long.
+	items = append(items, contextItem{label: "Collapse all folders", plain: (*App).menuCollapseTree})
 
 	a.contextNode = n
 	a.contextItems = items
