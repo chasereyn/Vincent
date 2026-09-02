@@ -26,7 +26,6 @@ package app
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -72,8 +71,7 @@ func loadDiffRows(rootDir, path string) ([]diff.Row, bool) {
 // "tracked", which routes to the safe outcome — reporting no changes rather
 // than rendering a whole file as new.
 func gitTracks(rootDir, path string) bool {
-	cmd := exec.Command("git", "-C", rootDir, "ls-files", "--error-unmatch", "--", path)
-	return cmd.Run() == nil
+	return gitCmd(rootDir, "ls-files", "--error-unmatch", "--", path).Run() == nil
 }
 
 // emptyTreeSHA is git's well-known hash of the empty tree. It is a constant
@@ -91,7 +89,7 @@ const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 // is. Agents get pointed at brand-new scratch repos often enough to be worth
 // the one extra shell-out.
 func diffBase(rootDir string) string {
-	if err := exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "-q", "HEAD").Run(); err == nil {
+	if err := gitCmd(rootDir, "rev-parse", "--verify", "-q", "HEAD").Run(); err == nil {
 		return "HEAD"
 	}
 	return emptyTreeSHA
@@ -105,8 +103,7 @@ func diffBase(rootDir string) string {
 // signal we need is "did anything come back on stdout", the exit code
 // carries no information we would act on.
 func gitDiffOutput(rootDir string, args ...string) string {
-	cmd := exec.Command("git", append([]string{"-C", rootDir}, args...)...)
-	out, _ := cmd.Output()
+	out, _ := gitCmd(rootDir, args...).Output()
 	return string(out)
 }
 
@@ -176,28 +173,37 @@ func (a *App) openDiffAtLine(path string, line int) {
 // A tab whose file has gone entirely clean keeps showing its last diff
 // rather than emptying out: an agent reverting its own change should not
 // silently erase the thing you were reading.
-func (a *App) reconcileDiffTab(t *editor.Tab) {
+//
+// The stat and the `git diff` both happened on the poller's goroutine and
+// arrive in polled; this function only decides and writes, so it stays on
+// the main goroutine. The poller reads the diff for every open diff tab
+// rather than trying to predict which ones moved — a wasted `git diff` in
+// the background costs nothing anyone can see, and the alternative is the
+// worker second-guessing tab state it does not own.
+func (a *App) reconcileDiffTab(t *editor.Tab, polled gitPollFile) {
 	// A missing file is not a reason to bail — a deletion is a diff too —
 	// but a zero mtime from the failed stat must not read as "unchanged".
 	mtime := time.Time{}
-	if info, err := os.Stat(t.Path); err == nil {
-		mtime = info.ModTime()
+	switch {
+	case polled.statErr:
+		return // transient stat error; try again next tick.
+	case polled.missing:
+		if t.DiskGone {
+			return // already reconciled this deletion.
+		}
+	default:
+		mtime = polled.mtime
 		if !mtime.After(t.Mtime) {
 			return
 		}
-	} else if !os.IsNotExist(err) {
-		return // transient stat error; try again next tick.
-	} else if t.DiskGone {
-		return // already reconciled this deletion.
 	}
 	t.DiskGone = mtime.IsZero()
 	t.Mtime = mtime
 
-	rows, ok := loadDiffRows(a.rootDir, t.Path)
-	if !ok {
+	if !polled.rowsOK {
 		return
 	}
-	t.SetDiffRows(rows)
+	t.SetDiffRows(polled.rows)
 }
 
 // -----------------------------------------------------------------------------

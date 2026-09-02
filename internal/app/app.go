@@ -418,6 +418,14 @@ type App struct {
 	// treeRefreshStop signals the background tree-refresh goroutine to exit.
 	treeRefreshStop chan struct{}
 
+	// gitPollBusy is true from the moment a background git refresh is
+	// launched until its result is applied. One in flight at a time: a slow
+	// repo would otherwise stack up workers, each forking git, which makes
+	// the stall it exists to avoid worse. Written only on the main
+	// goroutine (startGitPoll and applyGitPoll), so it needs no lock — see
+	// gitpoll.go.
+	gitPollBusy bool
+
 	// gitBranch is the current branch name for the project root (or a
 	// short commit SHA when HEAD is detached). Empty when the root isn't
 	// a git repo. Updated on the same 10-second tick as refreshGitStatus.
@@ -617,20 +625,33 @@ func (a *App) refreshGitStatus() {
 	// exactly the difference that tempts you into a second run and a
 	// second parser — and then they drift, and a file is orange in the
 	// tree but missing from the panel.
-	snap := loadGitSnapshot(a.rootDir)
+	a.applyGitSnapshot(loadGitSnapshot(a.rootDir))
+	a.refreshGitLineChanges()
+}
+
+// applyGitSnapshot stamps one `git status` read onto the Changes panel, the
+// tree's dirty-path maps, and the branch label.
+//
+// Split out of refreshGitStatus so the background poller can read a snapshot
+// on its own goroutine and hand it here without a second copy of the
+// stamping rules — which is the same "one parse, two consumers" argument
+// that gitentries.go makes, one level up. Every line of this writes UI
+// state, so it must only ever run on the main goroutine.
+func (a *App) applyGitSnapshot(snap gitSnapshot) {
+	if a.tree == nil {
+		return
+	}
 	a.refreshGitPanel(snap)
 	if !snap.IsRepo {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
 		a.gitBranch = ""
-		a.refreshGitLineChanges()
 		return
 	}
 	dirtyFiles := rebaseGitPaths(snap.DirtyFiles(), a.tree.Root.Path)
 	a.tree.DirtyFiles = dirtyFiles
 	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
 	a.gitBranch = snap.Branch
-	a.refreshGitLineChanges()
 }
 
 // refreshGitLineChanges refreshes gutter markers for every open text tab.
@@ -749,6 +770,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.quit = true
 	case *treeRefreshEvent:
 		a.refreshTreeNow()
+	case *gitPollEvent:
+		// A background refresh came back. Everything in it was read on a
+		// worker goroutine; this is where it becomes UI state. See
+		// gitpoll.go.
+		a.applyGitPoll(e.res)
 	case *finderRebuiltEvent:
 		// The background indexer just finished. Re-run the visible
 		// query so "Indexing…" gives way to real results without
@@ -759,23 +785,26 @@ func (a *App) handleEvent(ev tcell.Event) {
 	}
 }
 
-// refreshTreeNow re-runs the same refresh pipeline the 10s timer
-// fires: rescan the file tree (preserving expansion state), reconcile
-// any open tabs with disk, refresh git status, and invalidate the
-// finder index so a freshly-pulled file shows up everywhere at once.
-// Called from the periodic event and from runCustomAction's success
-// path so a Copy-from-remote action's output is visible immediately
-// instead of after the next tick.
+// refreshTreeNow is what the 10s timer fires: rescan the file tree
+// (preserving expansion state) and kick off a background git refresh.
+//
+// The tree rescan stays on this goroutine — it is ReadDir over the loaded
+// directories, and the identity-preserving reload has to be able to mutate
+// the live *Node tree. Everything that shells out to git, plus the disk
+// stats behind the open-tab reconcile, is now the poller's job: those were
+// four-plus forks per tick on the UI thread, and a fork that blocks blocks
+// the event loop, which is the pointer freezing mid-review while an agent
+// hammers the repo. The results come back as a gitPollEvent and are applied
+// by applyGitPoll. See gitpoll.go.
 func (a *App) refreshTreeNow() {
 	a.refreshTree()
-	a.reconcileOpenTabsWithDisk()
-	a.refreshGitStatus()
+	a.startGitPoll()
 	a.invalidateFinder()
 }
 
-// reconcileOpenTabsWithDisk runs once per background tick. For every
-// open tab with a real path it stats the file, compares the on-disk
-// mtime to what the tab last knew, and reacts:
+// reconcileOpenTabsWithDisk applies one background poll to the open tabs.
+// For every tab with a real path it compares the polled on-disk mtime to
+// what the tab last knew, and reacts:
 //
 //   - File missing  → flash once, mark the tab dirty so the user knows.
 //   - Disk newer, tab clean → reload the buffer silently, flash success.
@@ -783,10 +812,20 @@ func (a *App) refreshTreeNow() {
 //     that saving will overwrite.
 //
 // Untitled tabs (Path == "") are skipped because there's no disk file to
-// reconcile against.
-func (a *App) reconcileOpenTabsWithDisk() {
+// reconcile against, and so are tabs the poll has no entry for: those were
+// opened after the poll started, and the next tick will cover them. That is
+// also what drops results for a tab closed while the poll was in flight —
+// the loop walks the live tab list, not the poll's.
+//
+// The stat itself happened on the poller's goroutine (gitpoll.go); the
+// decisions and every write below happen here, on the main goroutine.
+func (a *App) reconcileOpenTabsWithDisk(files map[string]gitPollFile) {
 	for _, tab := range a.tabs {
 		if tab.Path == "" {
+			continue
+		}
+		polled, ok := files[tab.Path]
+		if !ok {
 			continue
 		}
 		if tab.IsDiff() {
@@ -794,11 +833,16 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			// reload, nothing can be dirty, and a file disappearing is a
 			// legitimate diff (an all-deletions one) rather than the
 			// warning case it is for an open file.
-			a.reconcileDiffTab(tab)
+			a.reconcileDiffTab(tab, polled)
 			continue
 		}
-		info, err := os.Stat(tab.Path)
-		if os.IsNotExist(err) {
+		if tab.IsImage() {
+			continue
+		}
+		// Gutter markers first: they are a straight overwrite and do not
+		// depend on any of the mtime reasoning below.
+		tab.GitLines = polled.lines
+		if polled.missing {
 			if !tab.DiskGone {
 				tab.DiskGone = true
 				tab.Dirty = true
@@ -806,7 +850,7 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			}
 			continue
 		}
-		if err != nil {
+		if polled.statErr {
 			// Permission denied or some other transient stat error — leave
 			// the tab as-is rather than spamming the user with a flash.
 			continue
@@ -817,14 +861,14 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			tab.DiskGone = false
 			tab.Mtime = time.Time{}
 		}
-		if !info.ModTime().After(tab.Mtime) {
+		if !polled.mtime.After(tab.Mtime) {
 			continue // unchanged on disk.
 		}
 		if tab.Dirty {
 			a.flash(fmt.Sprintf("%s changed on disk — your edits will overwrite on save",
 				filepath.Base(tab.Path)))
 			// Update Mtime so we don't re-flash every tick for the same change.
-			tab.Mtime = info.ModTime()
+			tab.Mtime = polled.mtime
 			continue
 		}
 		if err := tab.Reload(); err != nil {
