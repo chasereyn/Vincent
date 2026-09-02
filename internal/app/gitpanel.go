@@ -225,7 +225,9 @@ func (a *App) menuToggleGitPanel() {
 	a.gitPanelHover = -1
 }
 
-// gitPanelToggleLabel is the dynamic menu label for the toggle row.
+// gitPanelToggleLabel returns "Hide changes panel" or "Show changes
+// panel" for the current state. Callerless since the ≡ menu went away —
+// see sidebarToggleLabel in app.go for why the three of them stay.
 func (a *App) gitPanelToggleLabel() string {
 	if a.gitPanelShown {
 		return "Hide changes panel"

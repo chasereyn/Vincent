@@ -1027,6 +1027,131 @@ func TestHandleKey_RoutesToActiveTab(t *testing.T) {
 	a.handleKey(keyEv(tcell.KeyDelete, 0))
 }
 
+// resizedApp builds a test app at (w, h) and drives one real resize
+// through handleEvent, so the startup sidebar clamp and reflowPanels run
+// exactly as they do on the first frame of a live session. The Changes
+// panel is left hidden: the two-panel width budget is exercised in
+// gitpanel_test.go, and mixing it in here would make the sidebar numbers
+// a function of three constants instead of one.
+func resizedApp(t *testing.T, w, h int) *App {
+	t.Helper()
+	a := newTestApp(t, t.TempDir())
+	a.gitPanelShown = false
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.SetSize(w, h)
+	a.handleEvent(tcell.NewEventResize(w, h))
+	return a
+}
+
+// TestSidebarWidth_WideWindowKeepsTheDefault is the case the doubled
+// default was chosen for: on the monitor Vincent actually runs on, the
+// tree opens at its full 60 cells and the editor keeps the rest.
+func TestSidebarWidth_WideWindowKeepsTheDefault(t *testing.T) {
+	a := resizedApp(t, 200, 50)
+
+	if a.sidebarWidth != defaultSidebarWidth {
+		t.Fatalf("sidebarWidth = %d, want %d", a.sidebarWidth, defaultSidebarWidth)
+	}
+	_, _, ew, _ := a.editorRect()
+	if want := 200 - defaultSidebarWidth; ew != want {
+		t.Fatalf("editor width = %d, want %d", ew, want)
+	}
+	// The tree has to actually paint inside its rect — a width the
+	// renderer never receives is not a width.
+	a.draw()
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.Show()
+	if _, _, sw, _ := a.sidebarRect(); sw != defaultSidebarWidth-1 {
+		t.Fatalf("sidebar render width = %d, want %d (one cell is the splitter)", sw, defaultSidebarWidth-1)
+	}
+	if a.splitterX() != defaultSidebarWidth-1 {
+		t.Fatalf("splitter at %d, want %d", a.splitterX(), defaultSidebarWidth-1)
+	}
+}
+
+// TestSidebarWidth_NarrowWindowGetsAProportion is why the startup clamp
+// exists. 60 cells of an 80-column terminal leaves 20 for the editor, and
+// resizeSidebar alone would allow it (80 - 40 = 40, so 60 clamps to 40 —
+// still half the window). The percentage cap lands on 32 instead.
+func TestSidebarWidth_NarrowWindowGetsAProportion(t *testing.T) {
+	a := resizedApp(t, 80, 24)
+
+	if want := 80 * startupSidebarPercent / 100; a.sidebarWidth != want {
+		t.Fatalf("sidebarWidth = %d, want %d", a.sidebarWidth, want)
+	}
+	_, _, ew, _ := a.editorRect()
+	if ew < minEditorAfterDrag {
+		t.Fatalf("editor got %d columns, want at least %d", ew, minEditorAfterDrag)
+	}
+}
+
+// TestClampStartupSidebar_IsOneShot pins the reason the clamp is not just
+// folded into reflowPanels: it must not re-apply on a later resize, or a
+// splitter drag would quietly snap back the next time the terminal changed
+// size.
+func TestClampStartupSidebar_IsOneShot(t *testing.T) {
+	a := resizedApp(t, 200, 50)
+
+	// The user drags the tree wider than 40% of the window.
+	a.resizeSidebar(120)
+	if a.sidebarWidth != 120 {
+		t.Fatalf("fixture: drag to 120 gave %d", a.sidebarWidth)
+	}
+
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.SetSize(200, 40)
+	a.handleEvent(tcell.NewEventResize(200, 40))
+
+	if a.sidebarWidth != 120 {
+		t.Fatalf("a resize re-applied the startup clamp: sidebarWidth = %d, want 120", a.sidebarWidth)
+	}
+}
+
+// TestClampStartupSidebar_NoWidthYetIsNoop guards the ordering: the clamp
+// is a division by the window width, and a zero width would set the
+// sidebar to zero and mark itself done, so the real first frame would
+// never get its chance.
+func TestClampStartupSidebar_NoWidthYetIsNoop(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.width = 0
+	a.clampStartupSidebar()
+	if a.sidebarWidth != defaultSidebarWidth {
+		t.Fatalf("sidebarWidth = %d, want the untouched default %d", a.sidebarWidth, defaultSidebarWidth)
+	}
+	if a.startupSidebarDone {
+		t.Fatal("the clamp must not mark itself done before it has a width to measure")
+	}
+}
+
+// TestReflowPanels_ShrinkingWindowKeepsTheEditorPositive is the crash
+// guard reflowPanels exists for, re-checked at the new default: with the
+// tree at 60 and the Changes panel open, a window narrowed to 80 must
+// still leave every rect non-negative.
+func TestReflowPanels_ShrinkingWindowKeepsTheEditorPositive(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.gitPanelShown = true
+	a.width, a.height = 80, 24
+	a.reflowPanels()
+
+	if a.sidebarWidth < minSidebarWidth {
+		t.Fatalf("sidebarWidth = %d, want at least %d", a.sidebarWidth, minSidebarWidth)
+	}
+	for _, tc := range []struct {
+		name string
+		rect func() (int, int, int, int)
+	}{
+		{"sidebar", a.sidebarRect},
+		{"editor", a.editorRect},
+		{"tab bar", a.tabBarRect},
+		{"git panel", a.gitPanelRect},
+	} {
+		_, _, w, h := tc.rect()
+		if w < 0 || h < 0 {
+			t.Fatalf("%s rect went negative: %dx%d", tc.name, w, h)
+		}
+	}
+}
+
 // TestHandleEvent_Resize updates width/height.
 func TestHandleEvent_Resize(t *testing.T) {
 	a := newTestApp(t, t.TempDir())

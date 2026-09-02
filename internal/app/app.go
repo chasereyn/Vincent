@@ -40,9 +40,24 @@ import (
 // Layout, behavior, and feel constants. Constants instead of config —
 // the editor is opinionated by design.
 const (
-	defaultSidebarWidth = 30
-	minSidebarWidth     = 18
-	minEditorAfterDrag  = 40
+	// defaultSidebarWidth is the file explorer's opening width. Doubled
+	// from 30 on 2026-09-02: the owner's first real session said the tree
+	// should be about twice as wide, and it is right — a reviewer reads
+	// paths, not code, out of that panel, and at 30 cells a nested Go
+	// package name was clipped before the filename even started. Vincent
+	// gets a monitor of its own, so the editor can afford it.
+	defaultSidebarWidth = 60
+
+	// startupSidebarPercent caps that default at a fraction of the window
+	// on the first frame. 60 cells of an 80-column terminal leaves 20 for
+	// the editor, which is not a code pane, so a narrow terminal gets a
+	// proportional tree instead of the flat default. This is a STARTUP
+	// clamp only — once the user has dragged the splitter, resizeSidebar's
+	// minEditorAfterDrag budget is the only thing that overrides them.
+	startupSidebarPercent = 40
+
+	minSidebarWidth    = 18
+	minEditorAfterDrag = 40
 
 	// The Changes panel starts a little wider than the tree: its rows carry
 	// a filename AND a dimmed parent directory, and the parent is the half
@@ -172,6 +187,11 @@ type App struct {
 	// + 1-cell splitter on its right edge), in screen cells. The user can
 	// drag the splitter to change it within [minSidebarWidth, width-minEditorAfterDrag].
 	sidebarWidth int
+
+	// startupSidebarDone records that clampStartupSidebar has run. The
+	// percentage cap is a one-shot on the first sized frame: applying it
+	// again on a later resize would quietly undo a splitter drag.
+	startupSidebarDone bool
 
 	// The Changes panel down the right-hand side. gitPanelWidth mirrors
 	// sidebarWidth (block width, splitter included — here on its LEFT edge).
@@ -683,6 +703,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 	switch e := ev.(type) {
 	case *tcell.EventResize:
 		a.width, a.height = a.screen.Size()
+		// tcell delivers a resize before any other event, so this is the
+		// first frame that knows how wide the terminal is — and therefore
+		// the only place the startup percentage cap can be applied. It is
+		// a one-shot; see clampStartupSidebar.
+		a.clampStartupSidebar()
 		// Re-clamp both side panels before anything reads a rect: at the
 		// old widths a narrowed window leaves the editor at zero or
 		// negative width.
@@ -876,6 +901,33 @@ func (a *App) splitterX() int {
 		return -1
 	}
 	return a.sidebarWidth - 1
+}
+
+// clampStartupSidebar trims the opening sidebar width to at most
+// startupSidebarPercent of the window, once, on the first frame that has a
+// real window size to measure against.
+//
+// It has to be separate from resizeSidebar because the two answer different
+// questions. resizeSidebar enforces a floor for the editor (keep 40
+// columns) and is the right rule for a deliberate splitter drag — the user
+// asked for that width. This one enforces a proportion, and only for a
+// width nobody asked for: defaultSidebarWidth is tuned for the wide monitor
+// Vincent lives on, and on an 80-column terminal it would leave 20 cells of
+// editor, which resizeSidebar alone would happily allow (80 - 40 = 40, so
+// 60 would clamp to 40, still half the window).
+//
+// Once only, and gated on a.width, because a resize is where it runs from:
+// re-clamping on every resize would silently undo a splitter drag the next
+// time the terminal changed size.
+func (a *App) clampStartupSidebar() {
+	if a.startupSidebarDone || a.width <= 0 {
+		return
+	}
+	a.startupSidebarDone = true
+	max := a.width * startupSidebarPercent / 100
+	if max > 0 && a.sidebarWidth > max {
+		a.sidebarWidth = max
+	}
 }
 
 // resizeSidebar applies the user's desired sidebar width while clamping it
@@ -2180,8 +2232,10 @@ func (a *App) menuCollapseTree() {
 	a.flash("Folded all folders")
 }
 
-// sidebarToggleLabel returns the label the toggle row should display given
-// the current sidebar state. Drawn dynamically by drawMenu.
+// sidebarToggleLabel returns "Hide file explorer" or "Show file explorer"
+// for the current state. It lost its caller with the ≡ menu's dynamic
+// label row; kept (and still tested) because the phase-3b panel header is
+// the next surface that wants exactly this wording.
 func (a *App) sidebarToggleLabel() string {
 	if a.sidebarShown {
 		return "Hide file explorer"
@@ -2197,8 +2251,9 @@ func (a *App) menuToggleTabBar() {
 	a.tabBarShown = !a.tabBarShown
 }
 
-// tabBarToggleLabel returns the label the toggle row should display given
-// the current tab-bar state. Drawn dynamically by drawMenu.
+// tabBarToggleLabel returns "Hide tab bar" or "Show tab bar" for the
+// current state. Same story as sidebarToggleLabel above: no caller since
+// the ≡ menu went away, kept for the next surface that needs the wording.
 func (a *App) tabBarToggleLabel() string {
 	if a.tabBarShown {
 		return "Hide tab bar"
