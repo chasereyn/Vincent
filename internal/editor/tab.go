@@ -643,7 +643,7 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 
 		// Gutter / line number, right-aligned with one trailing space.
 		numStr := fmt.Sprintf("%*d", gw-1, lineIdx+1)
-		gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.Muted)
+		gutterStyle := tcell.StyleDefault.Background(lineBg).Foreground(th.LineNumber)
 		if isCursorLine {
 			gutterStyle = gutterStyle.Foreground(th.AccentSoft)
 		}
