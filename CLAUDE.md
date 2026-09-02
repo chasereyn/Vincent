@@ -265,6 +265,14 @@ Related: **Windows locks a running executable**, so `make install` fails
 while Vincent is open. That one is expected — the target explains it and
 tells you to quit first.
 
+**macOS kills a binary that was overwritten in place.** On Apple Silicon,
+`cp new ~/.local/bin/vincent` over an existing file leaves the kernel's
+code-signature cache pointing at the old contents, and the next launch dies
+with `Killed: 9` and nothing else — `--version` prints nothing, exit 137.
+`make install` therefore copies to `vincent.tmp` and renames, which gives
+the new binary a fresh inode. The first install on a machine never hits
+this, which is how 0.3.0 installed fine and 0.4.0 died.
+
 `make test` runs **without** `-race` on purpose, so the default build stays
 `CGO_ENABLED=0` and static. On the Mac, Apple clang is present, so
 `CGO_ENABLED=1 go test -race ./...` (`make test-race`) works locally and

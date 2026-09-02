@@ -110,9 +110,17 @@ build: | bin
 # default). NOT `go install`: that lands in GOPATH/bin, which is not on PATH
 # on this machine, so the command would appear to succeed and then `vincent`
 # would still be "not recognised".
+# Copy to a temp name and rename, never cp over the existing file: on
+# macOS (Apple Silicon) overwriting a Mach-O binary in place leaves the
+# kernel's code-signature cache pointing at the old contents, and the next
+# launch dies with "Killed: 9" and no other output. A rename gives the new
+# binary a fresh inode, which is what the kernel keys on. The first install
+# on a machine never hits this, which is why it went unnoticed until the
+# second one (0.4.0, 2026-09-02).
 install: build
 	@mkdir -p "$(INSTALL_DIR)"
-	@cp bin/$(BINARY) "$(INSTALL_DIR)/$(BINARY)" 2>/dev/null || { \
+	@cp bin/$(BINARY) "$(INSTALL_DIR)/$(BINARY).tmp" && mv -f "$(INSTALL_DIR)/$(BINARY).tmp" "$(INSTALL_DIR)/$(BINARY)" 2>/dev/null || { \
+		rm -f "$(INSTALL_DIR)/$(BINARY).tmp"; \
 		echo ""; \
 		echo "Could not replace $(INSTALL_DIR)/$(BINARY)."; \
 		echo "Windows locks a running executable - if Vincent is open, quit it"; \
