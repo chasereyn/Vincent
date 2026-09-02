@@ -100,7 +100,7 @@ func resolveArgs(args []string) cliResult {
 }
 
 // printHelp writes a short usage block to stdout. Kept brief on purpose:
-// the editor is itself the help — once running, the ≡ menu lists every
+// the editor is itself the help — once running, Esc ? lists every
 // action.
 func printHelp() {
 	fmt.Println(`Vincent — read-only, mouse-first terminal client for reviewing agent code.
@@ -112,9 +112,9 @@ Usage:
   vincent --version           Print the version and exit.
   vincent --help              Print this help and exit.
 
-Once running, click ≡ (top-left), right-click anywhere, or double-tap Esc
-for the action menu. See https://github.com/chasereyn/vincent for the
-full feature list.`)
+Once running, press Esc ? — or right-click on empty space — for the key
+table. See https://github.com/chasereyn/vincent for the full feature
+list.`)
 }
 
 // main routes to the action resolveArgs picked. Edit is by far the

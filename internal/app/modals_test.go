@@ -28,11 +28,10 @@ import (
 // modal flag and clears the side-state (drag, auto-scroll dir, callbacks).
 func TestCloseAllModals_ClearsEverything(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.menuOpen = true
+	a.cheatsheetOpen = true
 	a.promptOpen = true
 	a.confirmOpen = true
 	a.contextOpen = true
-	a.hoveredMenuRow = 3
 	a.contextNode = a.tree.Root
 	a.contextItems = []contextItem{{label: "x"}}
 	a.promptCallback = func(*App, string) {}
@@ -42,11 +41,8 @@ func TestCloseAllModals_ClearsEverything(t *testing.T) {
 
 	a.closeAllModals()
 
-	if a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen {
+	if a.cheatsheetOpen || a.promptOpen || a.confirmOpen || a.contextOpen {
 		t.Fatal("expected all modal flags off")
-	}
-	if a.hoveredMenuRow != -1 {
-		t.Fatalf("hoveredMenuRow not cleared: %d", a.hoveredMenuRow)
 	}
 	if a.contextNode != nil || a.contextItems != nil {
 		t.Fatal("context state not cleared")
@@ -109,11 +105,11 @@ func TestAnyModalOpen(t *testing.T) {
 	if a.anyModalOpen() {
 		t.Fatal("none open")
 	}
-	a.menuOpen = true
+	a.cheatsheetOpen = true
 	if !a.anyModalOpen() {
-		t.Fatal("expected true with menu open")
+		t.Fatal("expected true with the cheatsheet open")
 	}
-	a.menuOpen = false
+	a.cheatsheetOpen = false
 	a.promptOpen = true
 	if !a.anyModalOpen() {
 		t.Fatal("expected true with prompt open")
@@ -453,17 +449,17 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 
 	// Read-only entries only. "View diff" is a file-only addition from
 	// phase 1; nothing here creates, renames, or deletes anything.
-	copyLabels := []string{"Copy rel path", "Copy abs path"}
 	// "Set as root" is folders-only and skipped on the folder that IS the
-	// root, so the root node's menu is the shortest of the three.
+	// root; "Change root…" and the node-free "Collapse all folders" close
+	// every menu.
 	cases := []struct {
 		name string
 		node *filetree.Node
 		want []string
 	}{
-		{"folder", find("child"), []string{"Copy rel path", "Copy abs path", "Set as root", "Change root…"}},
-		{"file", find("f.txt"), []string{"View diff", "Copy rel path", "Copy abs path", "Change root…"}},
-		{"root", a.tree.Root, append(append([]string{}, copyLabels...), "Change root…")},
+		{"folder", find("child"), []string{"Copy rel path", "Copy abs path", "Set as root", "Change root…", "Collapse all folders"}},
+		{"file", find("f.txt"), []string{"View diff", "Copy rel path", "Copy abs path", "Change root…", "Collapse all folders"}},
+		{"root", a.tree.Root, []string{"Copy rel path", "Copy abs path", "Change root…", "Collapse all folders"}},
 	}
 
 	for _, tc := range cases {
@@ -482,8 +478,52 @@ func TestOpenTreeContext_OffersNoMutations(t *testing.T) {
 	}
 }
 
+// TestTreeContext_CollapseAllFolders runs the row, not just its label:
+// "Collapse all folders" is node-free (it uses contextItem.plain), and a
+// node-free row that was written with the node-taking `action` field
+// silently does nothing, because contextActivate gates action on a
+// non-nil node.
+func TestTreeContext_CollapseAllFolders(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := writeFile(filepath.Join(nested, "deep.txt"), "x"); err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(filepath.Join(nested, "deep.txt"))
+
+	outer := a.tree.Root.Children[0]
+	if !outer.IsDir || !outer.Expanded {
+		t.Fatalf("fixture: expected an expanded top-level folder, got %+v", outer)
+	}
+
+	a.openTreeContext(outer, 5, 5)
+	idx := -1
+	for i, it := range a.contextItems {
+		if it.label == "Collapse all folders" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("tree context menu has no Collapse all folders row: %v", a.contextItems)
+	}
+	a.contextHover = idx
+	a.contextActivate()
+
+	if outer.Expanded {
+		t.Fatal("the context row did not fold the tree")
+	}
+	if a.contextOpen {
+		t.Fatal("activating a row should close the context menu")
+	}
+}
+
 // TestOpenEditorContext_NoActiveTabFindsNothing guards the "fall through to
-// the main menu instead of popping an empty context menu" contract: with
+// the cheatsheet instead of popping an empty context menu" contract: with
 // no active tab neither Toggle line comment nor Revert file applies.
 func TestOpenEditorContext_NoActiveTabFindsNothing(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
@@ -496,7 +536,7 @@ func TestOpenEditorContext_NoActiveTabFindsNothing(t *testing.T) {
 }
 
 // TestOpenEditorContext_CommentableThenRevertable pins the two rows the
-// phase-5 menu trim demoted here from the ≡ menu: a freshly opened file
+// phase-5 menu trim demoted here from the old ≡ menu: a freshly opened file
 // offers only Toggle line comment (nothing to revert yet); after an edit,
 // Revert file joins it.
 func TestOpenEditorContext_CommentableThenRevertable(t *testing.T) {
@@ -519,8 +559,9 @@ func TestOpenEditorContext_CommentableThenRevertable(t *testing.T) {
 		return out
 	}
 	got := labels()
-	if len(got) != 1 || got[0] != "Toggle line comment" {
-		t.Fatalf("fresh file context = %v, want just [Toggle line comment]", got)
+	want := []string{"Toggle line comment", "Copy rel path", "Copy abs path"}
+	if !equalStrings(got, want) {
+		t.Fatalf("fresh file context = %v, want %v", got, want)
 	}
 
 	tab := a.activeTabPtr()
@@ -529,8 +570,9 @@ func TestOpenEditorContext_CommentableThenRevertable(t *testing.T) {
 		t.Fatal("expected a context menu after an edit")
 	}
 	got = labels()
-	if len(got) != 2 || got[0] != "Toggle line comment" || got[1] != "Revert file" {
-		t.Fatalf("edited-file context = %v, want [Toggle line comment Revert file]", got)
+	want = []string{"Toggle line comment", "Revert file", "Copy rel path", "Copy abs path"}
+	if !equalStrings(got, want) {
+		t.Fatalf("edited-file context = %v, want %v", got, want)
 	}
 
 	// Running the Revert row's action actually reverts — proves the
@@ -1363,4 +1405,20 @@ func TestScrollWindow_KeepsTheCaretVisible(t *testing.T) {
 	if got := scrollWindow(4, 2, 0); got != 0 {
 		t.Errorf("zero width: got %d, want 0", got)
 	}
+}
+
+// equalStrings reports whether two string slices carry the same values in
+// the same order. The context-menu tests assert on whole label lists, and
+// an element-by-element comparison written out at each site is what let a
+// new row slip in unnoticed.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -72,8 +72,7 @@ type frameKey struct {
 	gitEntryCount  int
 	gitBranch      string
 
-	menuOpen       bool
-	hoveredMenuRow int
+	cheatsheetOpen bool
 
 	contextOpen  bool
 	contextHover int
@@ -145,8 +144,7 @@ func (a *App) frameKey() frameKey {
 		gitPanelScroll:    a.gitPanelScroll,
 		gitEntryCount:     len(a.gitSnap.Entries),
 		gitBranch:         a.gitBranch,
-		menuOpen:          a.menuOpen,
-		hoveredMenuRow:    a.hoveredMenuRow,
+		cheatsheetOpen:    a.cheatsheetOpen,
 		contextOpen:       a.contextOpen,
 		contextHover:      a.contextHover,
 		confirmOpen:       a.confirmOpen,

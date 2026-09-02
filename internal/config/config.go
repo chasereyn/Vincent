@@ -19,7 +19,7 @@
 //	{"icons": "on"}      // force-on, even if detection would say no
 //	{"icons": "off"}     // force-off, even if a Nerd Font is installed
 //	{"tabBar": true}     // show the full tab strip; default is false —
-//	                     // row 0 shows only the ≡ button and the active
+//	                     // row 0 shows only the active
 //	                     // tab's name until toggled on (Esc-b)
 //	{"recentRoots": [    // folders Vincent has been rooted at, most
 //	  "/Users/x/a",      // recent first, capped at maxRecentRoots.
@@ -57,8 +57,8 @@ type Config struct {
 	Icons IconsMode
 	// TabBar shows or hides the tab strip in row 0. Default false: with
 	// one tab open (the common case for a review session) a full strip
-	// is a wasted row, so row 0 shows just the ≡ button and the active
-	// tab's name until the user turns it on (Esc-b, or the ≡ menu).
+	// is a wasted row, so row 0 shows just the active tab's name until
+	// the user turns it on (Esc t).
 	TabBar bool
 
 	// RecentRoots is the folders Vincent has been rooted at, most recent

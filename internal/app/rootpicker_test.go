@@ -567,9 +567,9 @@ func TestRootPicker_WheelScrollsWithoutMovingHighlight(t *testing.T) {
 // Drawing
 // -----------------------------------------------------------------------------
 
-// screenText reads one row of the simulation screen back as a string, so a
+// pickerScreenText reads one row of the simulation screen back as a string, so a
 // draw test can assert on what the user would actually see.
-func screenText(t *testing.T, a *App, y int) string {
+func pickerScreenText(t *testing.T, a *App, y int) string {
 	t.Helper()
 	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
 	var b strings.Builder
@@ -601,7 +601,7 @@ func TestDrawRootPicker_PaintsTitleAndRecents(t *testing.T) {
 	a.screen.Show()
 
 	_, my, _, _ := a.rootPickerModalRect()
-	if title := screenText(t, a, my+1); !strings.Contains(title, "Change root") {
+	if title := pickerScreenText(t, a, my+1); !strings.Contains(title, "Change root") {
 		t.Errorf("title row = %q, want it to contain \"Change root\"", title)
 	}
 	// The row is clipped from the LEFT when it doesn't fit, so the folder
@@ -609,7 +609,7 @@ func TestDrawRootPicker_PaintsTitleAndRecents(t *testing.T) {
 	// which is exactly the case a right-clip would render as ten rows of
 	// identical prefix with nothing to tell them apart.
 	rect := a.rootPicker.rowRects[0]
-	if row := screenText(t, a, rect.y); !strings.Contains(row, "someproject") {
+	if row := pickerScreenText(t, a, rect.y); !strings.Contains(row, "someproject") {
 		t.Errorf("row = %q, want it to contain the recent folder's name", row)
 	}
 }
@@ -627,7 +627,7 @@ func TestDrawRootPickerRow_ClipsFromTheLeft(t *testing.T) {
 		tcell.StyleDefault, a.theme.LineHL)
 	a.screen.Show()
 
-	row := screenText(t, a, my+4)
+	row := pickerScreenText(t, a, my+4)
 	if !strings.Contains(row, "vincent") {
 		t.Errorf("row = %q, want the tail (vincent) to survive the clip", row)
 	}
@@ -651,14 +651,14 @@ func TestDrawRootPicker_BrowseHeaderShowsWhereYouAre(t *testing.T) {
 	a.screen.Show()
 
 	_, my, _, _ := a.rootPickerModalRect()
-	header := screenText(t, a, my+1)
+	header := pickerScreenText(t, a, my+1)
 	if !strings.Contains(header, filepath.Base(dir)) {
 		t.Errorf("header = %q, want the browsed directory's name %q",
 			header, filepath.Base(dir))
 	}
 	// And the footer's pick button, since it is browse mode's mouse route
 	// to choosing this folder.
-	footer := screenText(t, a, a.rootPicker.useY)
+	footer := pickerScreenText(t, a, a.rootPicker.useY)
 	if !strings.Contains(footer, "Use this folder") {
 		t.Errorf("footer = %q, want the Use this folder button", footer)
 	}

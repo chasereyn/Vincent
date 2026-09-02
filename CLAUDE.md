@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.3.0`
+- Version: `internal/version/version.go`, currently `0.4.0`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -83,7 +83,7 @@ new file), 7 (markdown), 8, 9.
   repo / branch footer. Click a row to open its diff. `Esc g`.
 - **Phase 1, inline diffs.** Dual old/new gutters, ± markers, full-width
   row tints, and a darker word-level tint on the part of a line that
-  actually changed. `Esc d`, the action menu, a file's right-click entry,
+  actually changed. `Esc d`, a file's right-click entry,
   or a click on a change bar in the editor's git gutter (which lands on
   that change in the diff). A diff tab refreshes itself when the file
   underneath changes, so it tracks a running agent without losing scroll.
@@ -102,8 +102,8 @@ Already stripped:
 **The editing engine stays.** `internal/editor/undo.go`, `comment.go`,
 `indent.go`, and the mutation half of `tab.go` (`InsertRune`, `Backspace`,
 `Delete`, dirty state, save) are live and wired: `handleKey` falls through
-to `applyEditKey` (`app.go:1060`), `Esc s` saves, `Esc u`/`Esc r` undo and
-redo, and Save / Undo / Cut / Paste are menu rows. `Tab.Mode` plus
+to `applyEditKey` (`app.go:1060`), `Esc s` saves, `Esc u`/`Esc U` undo and
+redo. `Tab.Mode` plus
 `Tab.ReadOnly()` (= `Mode != ""`) is the whole design: a text tab is
 mutable, a diff or image tab is not. **Guard new mutations on
 `ReadOnly()`, never on `IsImage()`** — that was the actual bug phase 1
@@ -129,9 +129,9 @@ What the editor is missing, from `docs/research/2026-09-02/02-editor.md`:
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        3149  Event loop, layout rects, mouse dispatch, rendering
-internal/app/modals.go     1237  Modal scaffolding; dirty/conflict buttons are data
-internal/app/review.go     1122  Composer, saved-note markers, footer batch, send/copy
+internal/app/app.go        2761  Event loop, layout rects, mouse dispatch, rendering
+internal/app/modals.go     1257  Modal scaffolding; dirty/conflict buttons are data
+internal/app/review.go     1130  Composer, saved-note markers, footer batch, send/copy
 internal/app/gitpanel.go    516  The Changes panel: layout, rows, clicks, review footer
 internal/app/finder.go      474  Fuzzy file-finder modal
 internal/app/find.go        297  In-file find bar
@@ -141,8 +141,9 @@ internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
 internal/app/frame.go       219  frameKey: skip the repaint when motion changed nothing
 internal/app/gitpoll.go     202  The 10s git refresh on a worker -> gitPollEvent
 internal/app/conflict.go    179  Overwrite / Reload / Cancel / Show diff prompt
+internal/app/cheatsheet.go  220  The Esc-? key table, generated from leader.go
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
-internal/app/leader.go       ~80 Esc-prefixed key bindings (runes + named keys)
+internal/app/leader.go      192  Esc key bindings + hints; leaderRows is THE key list
 internal/app/reviewlog.go    ~60 review.Logf -> ~/.config/vincent/herdr.log
 internal/review/review.go   335  Comment, Batch, Render (wire format), Sanitize/Wrap
 internal/review/herdr.go    239  herdr agent list / pane send-text / agent focus
@@ -150,7 +151,7 @@ internal/editor/tab.go      985  Tab: buffer, cursor, scroll, hit-test, Conflict
 internal/editor/diffview.go 411  Diff render: dual gutters, row + word tints, overlays
 internal/editor/diffoverlay.go 204 Rows the app grows into a diff (composer, markers)
 internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid
-internal/filetree           659  Lazy tree, identity-preserving refresh, guides, hover
+internal/filetree           736  Lazy tree, refresh, guides, hover, CollapseAll
 internal/finder             583  Filename index (git ls-files) + fzy-style scorer
 internal/diff               364  Unified-diff parser — no tcell, no git, pure
 internal/icons              390  Nerd Font glyphs per file type
@@ -186,12 +187,47 @@ trade them away for convenience.
    discard. Anything finer than "commit everything" belongs to lazygit,
    one Herdr pane over. The Changes panel is where the pressure to add a
    checkbox will show up first.
-5. **Esc leader only.** No `Ctrl+` chords (see conventions below), and no
-   Esc-Esc double-tap either — Chase never presses Esc by accident, so a
-   single Esc arms the leader, one letter fires, Esc again cancels. The
-   menu is a click on `≡` or `Esc m`. The proposed table is in the roadmap
-   artifact under "Keys"; it moves find to `Esc /` and redo to `Esc U` to
-   free `f` (file panel) and `r` (review).
+5. **Esc leader only, and no menu.** No `Ctrl+` chords (see conventions
+   below), and no Esc-Esc double-tap either — Chase never presses Esc by
+   accident, so a single Esc arms the leader, one letter fires, Esc again
+   cancels. **There is no ≡ action menu.** It went away on 2026-09-02
+   after the first real session ("the Esc leader works great — the menu
+   is not needed"): every row it carried was also a leader key, so it was
+   a second code path into every action, a button in the tab bar, and a
+   modal with hover and enable predicates, all to restate the key table.
+   What replaced it is `Esc ?` — a read-only cheatsheet generated from
+   `leaderBindings()` (see `cheatsheet.go`). Do not re-add a menu. If an
+   action needs discovering, give it a leader key and it appears in the
+   cheatsheet for free.
+
+### 2026-09-02, after the first real session
+
+Three changes came out of the owner using 0.3.0 on a terminal for the
+first time. All three are decisions, not preferences — do not undo them
+without asking.
+
+- **The ≡ menu is gone.** See non-negotiable 5 above. `Esc ?` is a
+  read-only cheatsheet generated from `leaderBindings()`; the status
+  bar's armed-leader line comes from the same `leaderRows()`. That
+  sharing is the point: the hardcoded status string had drifted to
+  "f find · t tree" two renames after both keys moved, so the one piece
+  of UI whose job is naming the keys was naming the wrong ones. **Add a
+  binding to `leader.go` with a hint and a group and it documents
+  itself in both places.**
+- **`defaultSidebarWidth` is 60, not 30.** A reviewer reads paths out of
+  that panel, not code, and at 30 cells a nested package name was clipped
+  before the filename started. `clampStartupSidebar` caps it at 40% of
+  the window on the **first sized frame only** — one shot, because
+  re-applying it on every resize would quietly undo a splitter drag.
+  `resizeSidebar`'s `minEditorAfterDrag` budget is a different rule for a
+  different question (a deliberate drag keeps 40 columns of editor); note
+  that on a 120-column window the two together cap the tree below its own
+  default, which is the reflow doing its job.
+- **`Esc z` folds the whole tree** (`Tree.CollapseAll`). Every file opened
+  from the Changes panel or the finder calls `Tree.Reveal`, which expands
+  ancestors, so a review session leaves the sidebar shaped like your
+  history rather than like the project. Children stay loaded; the active
+  folder moves up to the nearest still-visible ancestor.
 
 ## Build
 
@@ -251,12 +287,17 @@ pattern. Do not assume local green means race-free.
 - `t.TempDir()` for filesystem state. Never write into the repo.
 - For drawing code, build a screen with
   `tcell.NewSimulationScreen("UTF-8")` and assert on `scr.GetContents()`.
-- **No `Ctrl+` shortcuts.** They fight tmux and terminal emulators — that
-  is the entire reason the action menu exists. Use `Esc`-prefixed leader
-  keys instead (see `leader.go`).
-- **Every right-click action must also live in the main menu.** macOS
-  Terminal under tmux swallows button 3. Right-click is a redundant
-  shortcut, never the only path to something.
+- **No `Ctrl+` shortcuts.** They fight tmux and terminal emulators. Use
+  `Esc`-prefixed leader keys instead (see `leader.go`).
+- **Every right-click action must also have a leader key or live in the
+  cheatsheet-visible key table.** macOS Terminal under tmux swallows
+  button 3. Right-click is a redundant shortcut, never the only path to
+  something. The table is `leaderBindings()` and the cheatsheet
+  (`Esc ?`) renders it, so a binding cannot ship undocumented — but an
+  action reachable *only* by right-click has no entry in either and is
+  therefore invisible. The four right-click-only actions today are
+  Revert file, Toggle line comment, Collapse all folders, and the
+  copy-path pair; all four are listed here on purpose.
 
 ## Patterns worth preserving
 
@@ -288,7 +329,8 @@ Each of these cost someone real time to find. Do not regress them.
 
 - **Zellij** sends Shift as a separate zero-button event *before* the wheel
   event. `handleMouse` tracks a sticky shift window to bridge it.
-- **macOS Terminal + tmux** swallows right-click — hence the menu rule above.
+- **macOS Terminal + tmux** swallows right-click — hence the
+  leader-key-or-cheatsheet rule above.
 - **Shift+mouse must no-op** so the terminal's own native selection and
   copy still work.
 - **A raw-mode TUI does not die with its terminal.** tcell puts the console

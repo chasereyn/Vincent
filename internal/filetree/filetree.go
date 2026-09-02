@@ -547,6 +547,83 @@ func (t *Tree) Toggle(n *Node) {
 	n.Expanded = !n.Expanded
 }
 
+// CollapseAll folds every expanded directory except the root, so a tree
+// the user has dug four levels into snaps back to its top-level listing in
+// one gesture (Esc z, or "Collapse all folders" on a tree row's
+// right-click). Reviewing an agent's work means opening files from the
+// Changes panel and the finder, and both call Reveal — which expands
+// ancestors — so after twenty minutes the tree is a long ragged column
+// with the shape of wherever you have been rather than the shape of the
+// project. Folding is how you get the shape back.
+//
+// Children stay loaded. Collapsing is a display decision, and throwing the
+// loaded children away would mean re-reading every directory on the next
+// expand for no gain.
+//
+// The active folder moves up to the nearest row the fold left visible, so
+// the highlight lands on something the user can actually see instead of
+// pointing at a node three collapsed levels down. ScrollY resets because
+// a fold-all is a "take me back to the top" gesture; Render's clampScroll
+// would rescue an out-of-range offset anyway, but landing mid-list after
+// asking for the overview is not what anyone means by it.
+func (t *Tree) CollapseAll() {
+	if t.Root == nil {
+		return
+	}
+	var fold func(n *Node)
+	fold = func(n *Node) {
+		for _, c := range n.Children {
+			if !c.IsDir {
+				continue
+			}
+			c.Expanded = false
+			fold(c)
+		}
+	}
+	fold(t.Root)
+	// The root is a header row, not a collapsible one — Render always
+	// flattens its children — so it stays expanded whatever the walk did.
+	t.Root.Expanded = true
+
+	if t.ActiveFolder != "" {
+		t.ActiveFolder = t.visibleDirFor(t.ActiveFolder)
+	}
+	t.ScrollY = 0
+	t.HoverY = -1
+}
+
+// visibleDirFor walks down from the root towards path for as long as the
+// node it is standing on is expanded, and returns the last directory it
+// reached. That is the nearest ancestor of path whose own row is on
+// screen, because a row is visible exactly when every directory above it
+// is expanded.
+//
+// Written as a descent rather than "walk up from path splitting the
+// string" so it can only ever name a directory the tree actually holds —
+// a path outside the root, or inside a hidden directory the tree refuses
+// to show, falls out at the root rather than returning a node that has no
+// row at all.
+func (t *Tree) visibleDirFor(path string) string {
+	node := t.Root
+	for node.IsDir && node.Expanded {
+		var next *Node
+		for _, c := range node.Children {
+			if !c.IsDir {
+				continue
+			}
+			if c.Path == path || strings.HasPrefix(path, c.Path+string(filepath.Separator)) {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			break
+		}
+		node = next
+	}
+	return node.Path
+}
+
 // Scroll moves the file tree's viewport by delta rows (negative = up).
 func (t *Tree) Scroll(delta int) {
 	t.ScrollY += delta

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/chasereyn/vincent/internal/filetree"
 )
 
 // TestLeaderActionFor_AllBindingsResolve walks the binding table and
@@ -32,8 +34,8 @@ func TestLeaderActionFor_AllBindingsResolve(t *testing.T) {
 // leaderActionFor reports a miss with nil so handleKey can distinguish
 // "leader fired" from "key was unbound — fall through".
 func TestLeaderActionFor_UnboundReturnsNil(t *testing.T) {
-	if leaderActionFor('z') != nil {
-		t.Fatal("'z' should not be a leader binding (no editor action mapped)")
+	if leaderActionFor('n') != nil {
+		t.Fatal("'n' should not be a leader binding (no editor action mapped)")
 	}
 }
 
@@ -151,6 +153,63 @@ func TestHandleKey_LeaderQuit(t *testing.T) {
 	}
 }
 
+// TestHandleKey_LeaderFoldAll pins Esc z. Reviewing agent work expands the
+// tree behind your back — every file opened from the Changes panel or the
+// finder calls Tree.Reveal — so this is the key that gets the sidebar's
+// shape back, and it has to work with the tree at any depth.
+func TestHandleKey_LeaderFoldAll(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	target := filepath.Join(nested, "deep.txt")
+	if err := os.WriteFile(target, []byte("x"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target) // openFile reveals, so both levels are now expanded
+
+	var expanded []string
+	var walk func(n *filetree.Node)
+	walk = func(n *filetree.Node) {
+		for _, c := range n.Children {
+			if c.IsDir && c.Expanded {
+				expanded = append(expanded, c.Name)
+			}
+			walk(c)
+		}
+	}
+	walk(a.tree.Root)
+	if len(expanded) < 2 {
+		t.Fatalf("fixture: expected two open levels, got %v", expanded)
+	}
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'z'))
+
+	expanded = nil
+	walk(a.tree.Root)
+	if len(expanded) != 0 {
+		t.Fatalf("Esc z should have folded every folder, still open: %v", expanded)
+	}
+	if a.statusMsg == "" {
+		t.Fatal("the fold should flash — a silent tree jump reads as a glitch")
+	}
+}
+
+// TestMenuCollapseTree_SingleFileModeFlashes covers the nil-tree guard.
+// Esc z reaches the action regardless of mode, and dereferencing a nil
+// tree is the crash it exists to prevent.
+func TestMenuCollapseTree_SingleFileModeFlashes(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tree = nil
+	a.menuCollapseTree()
+	if a.statusMsg == "" {
+		t.Fatal("expected a flash explaining there is no explorer to fold")
+	}
+}
+
 // TestHandleKey_LeaderUnboundFallsThrough is the regression test for the
 // "stray Esc shouldn't swallow the next keystroke" property: pressing
 // Esc and then an unbound letter must still deliver that letter to the
@@ -165,10 +224,11 @@ func TestHandleKey_LeaderUnboundFallsThrough(t *testing.T) {
 	a := newTestApp(t, dir)
 	a.openFile(target)
 
+	// 'n' rather than the 'z' this test used to press: z became fold-all.
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'z'))
+	a.handleKey(keyEv(tcell.KeyRune, 'n'))
 
-	if got := a.activeTabPtr().Buffer.Lines[0]; got != "z" {
+	if got := a.activeTabPtr().Buffer.Lines[0]; got != "n" {
 		t.Fatalf("unbound key after Esc should reach the editor, got %q", got)
 	}
 }
@@ -206,26 +266,28 @@ func TestHandleKey_EscEscCancelsLeader(t *testing.T) {
 		t.Fatal("first Esc should arm the leader")
 	}
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if a.menuOpen {
-		t.Fatal("Esc-Esc must not open the menu any more")
+	if a.cheatsheetOpen {
+		t.Fatal("Esc-Esc must not open an overlay")
 	}
 	if a.leaderArmed() {
 		t.Fatal("second Esc should cancel the armed leader")
 	}
 }
 
-// TestHandleKey_LeaderMenu binds Esc-m to the action menu, replacing the
-// old Esc-Esc double-tap.
-func TestHandleKey_LeaderMenu(t *testing.T) {
+// TestHandleKey_LeaderCheatsheet binds Esc-? to the key table, and pins
+// that a following Esc closes it rather than arming the leader again. That
+// second half is the whole reason the cheatsheet is routed ahead of the Esc
+// branch in handleKey.
+func TestHandleKey_LeaderCheatsheet(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'm'))
-	if !a.menuOpen {
-		t.Fatal("Esc-m should open the menu")
+	a.handleKey(keyEv(tcell.KeyRune, '?'))
+	if !a.cheatsheetOpen {
+		t.Fatal("Esc-? should open the cheatsheet")
 	}
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if a.menuOpen {
-		t.Fatal("Esc with the menu open should close it")
+	if a.cheatsheetOpen {
+		t.Fatal("Esc with the cheatsheet open should close it")
 	}
 }
 

@@ -86,15 +86,14 @@ func (a *App) findPrev() {
 	}
 }
 
-// menuFind is the action menu entry point. Behaves identically to the
+// menuFind is the named entry point for the bar. Behaves identically to the
 // Esc-f leader — opens the bar against the active tab.
 func (a *App) menuFind() {
-	a.closeMenu()
 	a.openFind()
 }
 
 // hasFindable reports whether the active tab is a text tab — used to
-// gray out the menu row on image tabs / no-tab states.
+// keep the find bar shut on image tabs / no-tab states.
 func (a *App) hasFindable() bool {
 	t := a.activeTabPtr()
 	return t != nil && !t.IsImage()

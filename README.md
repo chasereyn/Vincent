@@ -45,18 +45,26 @@ Point it at **a repository**, not a folder of repositories — until phase 4
 lands, git features resolve against the directory you opened, so a parent
 folder gives you a file tree and nothing else.
 
-Click `≡` at the top left, right-click anywhere, or double-tap `Esc` for
-the action menu. There are no `Ctrl+` shortcuts on purpose — they fight
-tmux and terminal emulators. Leader keys are `Esc`-prefixed.
+Press `Esc ?` — or right-click on empty space — for the key table. There
+are no `Ctrl+` shortcuts on purpose: they fight tmux and terminal
+emulators. Every command is an `Esc`-prefixed leader key.
 
 | | |
 |---|---|
-| `Esc Esc` | Action menu — every command, always |
+| `Esc ?` | **The key table — every binding, always** |
 | `Esc d` | **Diff the active file** |
+| `Esc r` | Add a review note on the diff line |
+| `Esc ⏎` | Send the review batch to the agent |
+| `Esc y` | Copy the review batch to the clipboard |
 | `Esc g` | **Show / hide the Changes panel** |
 | `Esc p` | Find file by name |
-| `Esc f` | Find in file |
-| `Esc t` | Show / hide the file tree |
+| `Esc /` | Find in file |
+| `Esc f` | Show / hide the file explorer |
+| `Esc t` | Show / hide the tab bar |
+| `Esc z` | Fold every folder in the tree |
+| `Esc s` | Save |
+| `Esc u` / `Esc U` | Undo / redo |
+| `Esc a` | Select all |
 | `Esc w` | Close tab |
 | `Esc q` | Quit |
 

@@ -275,11 +275,10 @@ func (a *App) composerActive() bool {
 
 // openReviewComposer starts a note against the diff's selected rows.
 //
-// Bound to Esc r, offered in the ≡ menu, and offered again on a diff row's
+// Bound to Esc r, and offered again on a diff row's
 // right-click. Every path lands here, so the preconditions live here too
 // rather than in three callers.
 func (a *App) openReviewComposer() {
-	a.closeMenu()
 	tab := a.activeTabPtr()
 	if tab == nil || !tab.IsDiff() {
 		a.flash("Open a diff first — Esc d")
@@ -519,9 +518,16 @@ func (a *App) reviewDiffPress(tab *editor.Tab, localX, localY int) bool {
 // after selecting the row under the pointer.
 //
 // Right-click is a redundant path, never the only one — macOS Terminal
-// under tmux swallows button 3 — so everything here also lives in the ≡
-// menu. Selecting the row first is what makes the gesture one motion
-// instead of "click, then right-click the same line".
+// under tmux swallows button 3 — so every review action here also has a
+// leader key (Esc r / Esc ⏎ / Esc y, all listed in the Esc-? cheatsheet).
+// Selecting the row first is what makes the gesture one motion instead of
+// "click, then right-click the same line".
+//
+// The copy-path pair is here for the same reason it is on the editor's
+// context menu: it was a ≡ menu row, the menu is gone, and a diff tab
+// carries the real file's path — so "copy the path of the file I am
+// reviewing" has to work from the diff, which is where the reviewer
+// actually is.
 func (a *App) openDiffContext(tab *editor.Tab, x, y int) bool {
 	if tab == nil || !tab.IsDiff() {
 		return false
@@ -540,6 +546,10 @@ func (a *App) openDiffContext(tab *editor.Tab, x, y int) bool {
 			contextItem{label: "Copy review", plain: (*App).copyReview},
 		)
 	}
+	items = append(items,
+		contextItem{label: "Copy rel path", plain: (*App).menuCopyRelativePath},
+		contextItem{label: "Copy abs path", plain: (*App).menuCopyAbsolutePath},
+	)
 	a.contextNode = nil
 	a.contextItems = items
 	a.contextHover = 0
@@ -882,10 +892,10 @@ func (a *App) openDiffForComment(idx int) {
 // Handoff
 // -----------------------------------------------------------------------------
 
-// hasReviewNotes is the menu predicate for the two handoff rows.
+// hasReviewNotes gates the two handoff actions.
 func (a *App) hasReviewNotes() bool { return a.reviewBatch.Len() > 0 }
 
-// hasDiffTab is the menu predicate for "Add review note": the composer only
+// hasDiffTab gates "Add review note": the composer only
 // makes sense over a diff.
 func (a *App) hasDiffTab() bool {
 	tab := a.activeTabPtr()
@@ -907,7 +917,6 @@ func (a *App) hasDiffTab() bool {
 // delivered it, and clearing here would lose the review to a paste they
 // never made.
 func (a *App) sendReview() {
-	a.closeMenu()
 	if a.reviewBatch.Len() == 0 {
 		a.flash("No review notes · Esc r on a diff line")
 		return
@@ -948,7 +957,6 @@ func (a *App) sendReviewTo(t review.Target, text string) {
 // alone otherwise. Bound to Esc y, for handing a review to something that
 // is not a herdr pane — a browser, a chat window, another machine.
 func (a *App) copyReview() {
-	a.closeMenu()
 	if a.reviewBatch.Len() == 0 {
 		a.flash("No review notes · Esc r on a diff line")
 		return
