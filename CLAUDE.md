@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.2.0`
+- Version: `internal/version/version.go`, currently `0.3.0`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -51,10 +51,31 @@ running executable, which makes that a real question.
 
 ## Where it stands
 
-Phases 0 through 2 are done. Vincent is usable for a real review pass:
-open a repo, hit `Esc g` for the Changes panel, click a file, read its
-diff. What is missing is the second half of the loop — writing a note and
-sending it back to the agent.
+Phases 0 through 5 and 6a landed on 2026-09-02 (version 0.3.0). The loop
+closes: open a repo, `Esc g` for the Changes panel, click a file, read its
+diff, `Esc r` on a line to write a note, `Esc Enter` to drop the batch
+into the agent's prompt. None of the 2026-09-02 work has been seen on a
+real terminal yet — it was built by four agents against simulation-screen
+tests and merged by hand. **The first thing to do next session is run it
+and look.** Then phases 3b (git writes, root switcher), 6b (find/replace,
+new file), 7 (markdown), 8, 9.
+
+- **Phase 3, the review loop.** `internal/review` holds the note model,
+  the wire format, and the herdr client. A diff tab grows overlay rows for
+  the inline composer and for saved-note markers (`editor/diffoverlay.go`).
+  The batch sits in the git panel footer with Send and Copy. Failures go
+  to `~/.config/vincent/herdr.log`, never stderr.
+- **Phase 4, the render loop.** `app/frame.go` skips the repaint when a
+  mouse-motion event changed nothing observable; `Tab.Render` writes each
+  cell once and `draw` no longer clears the screen; `app/gitpoll.go` runs
+  the ten-second git refresh on a worker and posts a `gitPollEvent`.
+- **Phase 5, chrome.** Ayu Darker palette, Zed-style tree rows with indent
+  guides and hover/selected fills, `Esc t` tab bar toggle (off by default),
+  Revert and Toggle line comment demoted to the editor's right-click menu,
+  capitalised plain identifiers coloured as types.
+- **Phase 6a, editor safety.** Bracketed paste, and the conflict model in
+  `app/conflict.go`: a sticky `Tab.Conflict`, a red dot, and a save that
+  refuses with Overwrite / Reload / Cancel / Show diff.
 
 - **Phase 2, the Changes panel.** Zed's shape, read-only: `Changes (N)`
   header, Tracked and Untracked sections, filename in its status colour
@@ -108,25 +129,33 @@ What the editor is missing, from `docs/research/2026-09-02/02-editor.md`:
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        2641  Event loop, layout rects, mouse dispatch, rendering
-internal/app/modals.go     1081  Modal scaffolding — reuse for the review composer
+internal/app/app.go        3149  Event loop, layout rects, mouse dispatch, rendering
+internal/app/modals.go     1237  Modal scaffolding; dirty/conflict buttons are data
+internal/app/review.go     1122  Composer, saved-note markers, footer batch, send/copy
+internal/app/gitpanel.go    516  The Changes panel: layout, rows, clicks, review footer
 internal/app/finder.go      474  Fuzzy file-finder modal
-internal/app/gitpanel.go    452  The Changes panel: layout, rows, clicks
 internal/app/find.go        297  In-file find bar
 internal/app/gitentries.go  258  THE git status parse — tree and panel both
-internal/app/diffview.go    234  git diff shell-outs, diff tabs, live refresh
-internal/app/gitstatus.go   221  Branch, gutter markers, dirty-folder rollup
+internal/app/diffview.go    250  git diff shell-outs, diff tabs, live refresh
+internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
+internal/app/frame.go       219  frameKey: skip the repaint when motion changed nothing
+internal/app/gitpoll.go     202  The 10s git refresh on a worker -> gitPollEvent
+internal/app/conflict.go    179  Overwrite / Reload / Cancel / Show diff prompt
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
-internal/app/leader.go       66  Esc-prefixed key bindings
-internal/editor/tab.go      846  Tab: buffer, cursor, scroll, hit-test  <- still mutable
-internal/editor/diffview.go 363  Diff render: dual gutters, row + word tints
-internal/editor/highlight.go 185 Chroma -> per-rune []tcell.Style grid
-internal/filetree           585  Lazy tree, identity-preserving refresh, hit-test
+internal/app/leader.go       ~80 Esc-prefixed key bindings (runes + named keys)
+internal/app/reviewlog.go    ~60 review.Logf -> ~/.config/vincent/herdr.log
+internal/review/review.go   335  Comment, Batch, Render (wire format), Sanitize/Wrap
+internal/review/herdr.go    239  herdr agent list / pane send-text / agent focus
+internal/editor/tab.go      985  Tab: buffer, cursor, scroll, hit-test, Conflict
+internal/editor/diffview.go 411  Diff render: dual gutters, row + word tints, overlays
+internal/editor/diffoverlay.go 204 Rows the app grows into a diff (composer, markers)
+internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid
+internal/filetree           659  Lazy tree, identity-preserving refresh, guides, hover
 internal/finder             583  Filename index (git ls-files) + fzy-style scorer
-internal/diff               358  Unified-diff parser — no tcell, no git, pure
+internal/diff               364  Unified-diff parser — no tcell, no git, pure
 internal/icons              390  Nerd Font glyphs per file type
-internal/theme              171  The palette. All surfaces pure black
-internal/config             133  ~/.config/vincent/config.json
+internal/theme              251  The palette. Ayu Darker on #030405
+internal/config             133  ~/.config/vincent/config.json (icons, tabBar)
 internal/clipboard           50  OSC 52 — works over SSH and through tmux
 ```
 
@@ -200,11 +229,11 @@ Related: **Windows locks a running executable**, so `make install` fails
 while Vincent is open. That one is expected — the target explains it and
 tells you to quit first.
 
-`make test` runs **without** `-race` on purpose. The race detector needs
-cgo, and this machine builds with `CGO_ENABLED=0` — no C compiler, which
-is also what keeps the binary static. CI runners do have one, so
-`.github/workflows/test.yml` runs `-race` on all three platforms; locally
-that is `make test-race`, which needs `scoop install mingw` on Windows.
+`make test` runs **without** `-race` on purpose, so the default build stays
+`CGO_ENABLED=0` and static. On the Mac, Apple clang is present, so
+`CGO_ENABLED=1 go test -race ./...` (`make test-race`) works locally and
+was green on 2026-09-02 after all four phases merged. On Windows it needs
+`scoop install mingw`. CI runs `-race` on all three platforms either way.
 
 This matters more than it looks: the goroutine-to-UI-thread pattern
 (custom tcell events) is exactly the kind of code the race detector
@@ -313,11 +342,12 @@ starting its phase.
 | 0 | Fork, strip, blacken | **done** |
 | 1 | Inline (Zed-style) diff viewer | **done** |
 | 2 | Zed-shaped read-only git panel | **done** |
-| 3 | Review notes + herdr/clipboard handoff, legend in the batch | next |
-| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | |
-| 4 | Render loop: skip no-op motion frames, drain events, git tick off the UI thread | |
-| 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | |
-| 6 | Editor: bracketed paste, conflict model, find/replace, new file, Myers diff | |
+| 3 | Review notes + herdr/clipboard handoff, legend in the batch | **done**, unseen on a real terminal |
+| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | next |
+| 4 | Render loop: skip no-op motion frames, drain events, git tick off the UI thread | **done** |
+| 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | **done** |
+| 6a | Editor safety: bracketed paste, conflict model | **done** |
+| 6b | Editor: find/replace, new file, save-as, Myers diff | |
 | 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | |
 | 8 | Multi-repo workspace + content search | |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | |

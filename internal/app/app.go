@@ -587,6 +587,7 @@ func New(rootDir string) (*App, error) {
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.loadUserConfig()
+	installReviewLog()
 	a.refreshGitStatus()
 	a.applyStartupPanelDefaults()
 	a.flash("Welcome — click a file to open · click  ≡  for the menu")
@@ -653,6 +654,7 @@ func NewSingleFile(filePath string) (*App, error) {
 	}
 	a.setActiveFolder(rootDir)
 	a.loadUserConfig()
+	installReviewLog()
 	// openFile loads the file's git gutter markers itself (a file-scoped
 	// `git diff`), so single-file mode shows change bars on open without
 	// the whole-repo status or tree walk that New performs.

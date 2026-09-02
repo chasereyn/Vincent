@@ -20,4 +20,4 @@ package version
 //
 //	0.1.0  phase 0: the fork, stripped and blackened
 //	0.2.0  phases 1 and 2: inline diffs, the Changes panel
-const Version = "0.2.0"
+const Version = "0.3.0"
