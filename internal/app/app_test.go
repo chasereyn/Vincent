@@ -1973,3 +1973,158 @@ func TestDrawTabBar_NoIconWhenDisabled(t *testing.T) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Bracketed paste
+// -----------------------------------------------------------------------------
+
+// recordingScreen wraps a SimulationScreen and counts the input-mode calls
+// initScreenInput makes. The simulation screen stores its paste flag in an
+// unexported field with no getter, so counting the call is the only way to
+// prove bracketed paste was switched on.
+type recordingScreen struct {
+	tcell.SimulationScreen
+	mouseCalls int
+	pasteCalls int
+}
+
+// EnableMouse records the call and forwards it to the wrapped screen.
+func (s *recordingScreen) EnableMouse(flags ...tcell.MouseFlags) {
+	s.mouseCalls++
+	s.SimulationScreen.EnableMouse(flags...)
+}
+
+// EnablePaste records the call and forwards it to the wrapped screen.
+func (s *recordingScreen) EnablePaste() {
+	s.pasteCalls++
+	s.SimulationScreen.EnablePaste()
+}
+
+// TestInitScreenInput_EnablesMouseAndPaste pins the fix for the paste
+// data-loss bug at its source: both constructors go through
+// initScreenInput, and it must turn bracketed paste on. Without the
+// EnablePaste call the terminal delivers a paste as bare keystrokes and no
+// amount of handling downstream can tell them from typing.
+func TestInitScreenInput_EnablesMouseAndPaste(t *testing.T) {
+	scr := &recordingScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8")}
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	defer scr.Fini()
+
+	initScreenInput(scr)
+
+	if scr.pasteCalls != 1 {
+		t.Fatalf("EnablePaste calls: got %d, want 1", scr.pasteCalls)
+	}
+	if scr.mouseCalls != 1 {
+		t.Fatalf("EnableMouse calls: got %d, want 1", scr.mouseCalls)
+	}
+}
+
+// pasteEvents drives one whole bracketed paste through handleEvent: the
+// start marker, the body as key events, then the end marker. This is the
+// exact shape tcell delivers a paste in.
+func pasteEvents(a *App, body ...tcell.Event) {
+	a.handleEvent(tcell.NewEventPaste(true))
+	for _, ev := range body {
+		a.handleEvent(ev)
+	}
+	a.handleEvent(tcell.NewEventPaste(false))
+}
+
+// TestHandlePaste_EscAndQAreDataNotCommands is the regression test for the
+// bug: pasted text containing an escape followed by 'q' used to arm the Esc
+// leader and quit Vincent mid-paste. Inside a paste nothing dispatches —
+// the payload lands in the buffer as one undo step and the app stays put.
+//
+// An escape is dropped rather than inserted. That is not a choice so much
+// as the only reachable behaviour: tcell.NewEventKey folds a 0x1b rune into
+// KeyEsc, so an escape byte can never arrive as a rune, and a terminal in
+// bracketed-paste mode filters escape sequences out of the payload anyway.
+// What matters is that it stops being a command — everything printable
+// around it lands in the buffer verbatim.
+func TestHandlePaste_EscAndQAreDataNotCommands(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	pasteEvents(a,
+		keyEv(tcell.KeyEsc, 0),    // would have armed the leader
+		keyEv(tcell.KeyRune, 'q'), // ... and quit Vincent
+		keyEv(tcell.KeyRune, 'u'),
+		keyEv(tcell.KeyRune, 'i'),
+		keyEv(tcell.KeyEnter, 0),
+		keyEv(tcell.KeyTab, 0),
+		keyEv(tcell.KeyRune, '\x1b'), // normalised by tcell to KeyEsc
+		keyEv(tcell.KeyRune, 'z'),
+	)
+
+	if a.quit {
+		t.Fatal("a pasted Esc-q must not quit")
+	}
+	if a.dirtyOpen || a.menuOpen {
+		t.Fatal("a paste must not open any modal")
+	}
+	if a.pasting {
+		t.Fatal("End() should have closed the paste window")
+	}
+	tab := a.activeTabPtr()
+	want := "qui\n\tz" + "seed"
+	if got := tab.Buffer.String(); got != want {
+		t.Fatalf("buffer after paste: got %q, want %q", got, want)
+	}
+	if !tab.CanUndo() {
+		t.Fatal("the paste should be undoable")
+	}
+	if !tab.Undo() {
+		t.Fatal("Undo should report a step was taken")
+	}
+	if got := tab.Buffer.String(); got != "seed" {
+		t.Fatalf("one Undo should revert the whole paste; got %q", got)
+	}
+}
+
+// TestHandlePaste_ReadOnlyTabDiscards proves a paste never reaches a diff
+// tab's buffer. A diff tab carries the real file's Path, so text landing in
+// it would be one Save away from overwriting the user's source.
+func TestHandlePaste_ReadOnlyTabDiscards(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	rows := []diff.Row{{Kind: diff.KindContext, Text: "ctx"}}
+	a.tabs = append(a.tabs, editor.NewDiffTab(filepath.Join(dir, "x.go"), rows))
+	a.activeTab = 0
+
+	pasteEvents(a, keyEv(tcell.KeyRune, 'x'))
+
+	if got := a.tabs[0].Buffer.String(); got != "ctx" {
+		t.Fatalf("read-only tab buffer changed: %q", got)
+	}
+	if !strings.Contains(a.statusMsg, "read-only") {
+		t.Fatalf("expected a read-only flash, got %q", a.statusMsg)
+	}
+}
+
+// TestHandlePaste_ModalOpenDiscards keeps pasted text out of the buffer
+// behind an overlay. The user's target when a modal is up is the modal, and
+// silently inserting into the file underneath it is the worst of both.
+func TestHandlePaste_ModalOpenDiscards(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.openMenu()
+
+	pasteEvents(a, keyEv(tcell.KeyRune, 'x'))
+
+	if got := a.activeTabPtr().Buffer.String(); got != "seed" {
+		t.Fatalf("buffer changed behind a modal: %q", got)
+	}
+}

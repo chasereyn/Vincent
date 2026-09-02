@@ -447,7 +447,28 @@ type App struct {
 	// SIGTERM. Held so a normal exit can unregister it. See shutdown.go.
 	signalStop chan os.Signal
 
+	// pasting / pasteBuf carry a bracketed paste while it is arriving.
+	// The terminal wraps a paste in EventPaste{Start} … EventPaste{End}
+	// and delivers the body as ordinary key events in between, so every
+	// keystroke inside that window is DATA, never a command: handleKey
+	// appends to pasteBuf and returns without arming the Esc leader or
+	// touching the buffer. Without this an Esc byte in pasted text arms
+	// the leader and the next 'q' quits mid-paste. The whole buffer is
+	// inserted once at End() so an N-line paste is one undo step.
+	pasting  bool
+	pasteBuf []rune
+
 	quit bool
+}
+
+// initScreenInput turns on the input modes both constructors need. Mouse
+// events are the obvious half; bracketed paste is the half that is easy to
+// forget, and forgetting it is a data-loss bug rather than a missing
+// feature — see the pasting field above. Factored out so a test can hand
+// in a recording screen and prove both calls happen.
+func initScreenInput(scr tcell.Screen) {
+	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	scr.EnablePaste()
 }
 
 // New initialises the screen and mouse, builds the file tree at rootDir,
@@ -460,7 +481,7 @@ func New(rootDir string) (*App, error) {
 	if err := scr.Init(); err != nil {
 		return nil, err
 	}
-	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	initScreenInput(scr)
 
 	th := theme.Default()
 	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
@@ -523,7 +544,7 @@ func NewSingleFile(filePath string) (*App, error) {
 	if err := scr.Init(); err != nil {
 		return nil, err
 	}
-	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	initScreenInput(scr)
 
 	th := theme.Default()
 	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
@@ -707,6 +728,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleKey(e)
 	case *tcell.EventMouse:
 		a.handleMouse(e)
+	case *tcell.EventPaste:
+		a.handlePaste(e)
 	case *autoScrollEvent:
 		a.handleAutoScroll()
 	case *quitEvent:
@@ -920,6 +943,15 @@ func (a *App) menuModalRect() (x, y, w, h int) {
 // only "command" key is Esc, which closes the menu and acts as the leader
 // for the hotkey table in leader.go (Esc s = Save, Esc u = Undo, etc.).
 func (a *App) handleKey(ev *tcell.EventKey) {
+	// A bracketed paste is in flight: every key between EventPaste{Start}
+	// and EventPaste{End} is pasted text, not a command. This branch is
+	// first for exactly that reason — an Esc byte in the middle of a paste
+	// must not arm the leader, because the next character is very likely a
+	// letter, and 'q' would quit mid-paste.
+	if a.pasting {
+		a.appendPasteKey(ev)
+		return
+	}
 	// Secondary modals own the keyboard while they're up. Each handler
 	// understands Esc (cancel), Enter (submit / activate), and the keys
 	// relevant to its layout (text editing for the prompt, arrow keys for
@@ -1069,6 +1101,65 @@ func (a *App) applyEditKey(tab *editor.Tab, ev *tcell.EventKey) {
 		tab.InsertString(tab.IndentUnit)
 	case tcell.KeyRune:
 		tab.InsertRune(ev.Rune())
+	}
+}
+
+// handlePaste consumes a bracketed paste. Start() opens the window and
+// resets the accumulator; End() closes it and delivers the whole payload
+// in a single InsertString, which is what makes an N-line paste one undo
+// step instead of N, and what keeps a literal tab in the pasted text a tab
+// rather than the buffer's IndentUnit.
+//
+// A paste is only ever accepted by an editable text buffer. Any overlay
+// that owns the keyboard (the menu, a modal, the find bar, the file finder)
+// and any read-only tab discard it with a flash instead — delivering it
+// would either leak the text into a surface that cannot hold it or, on a
+// diff tab, write diff text over the user's source.
+func (a *App) handlePaste(ev *tcell.EventPaste) {
+	if ev.Start() {
+		a.pasting = true
+		a.pasteBuf = a.pasteBuf[:0]
+		return
+	}
+	if !a.pasting {
+		return // End with no Start — nothing was accumulated.
+	}
+	a.pasting = false
+	text := string(a.pasteBuf)
+	a.pasteBuf = a.pasteBuf[:0]
+	if text == "" {
+		return
+	}
+	if a.anyModalOpen() {
+		a.flash("Paste ignored — close the open panel first")
+		return
+	}
+	tab := a.activeTabPtr()
+	if tab == nil {
+		a.flash("Paste ignored — no file open")
+		return
+	}
+	if tab.ReadOnly() {
+		a.flash(fmt.Sprintf("Paste ignored — %s is read-only", tab.DisplayName()))
+		return
+	}
+	tab.InsertString(text)
+}
+
+// appendPasteKey folds one key event into the in-flight paste buffer.
+// Runes go in as themselves, Enter as "\n", Tab as "\t"; everything else
+// — arrows, function keys, and a bare Esc — is dropped. Dropping Esc is
+// the point of the whole mechanism: it is data here, not the leader key,
+// and a terminal in bracketed-paste mode filters real escape sequences out
+// of the payload anyway, so nothing legible is lost.
+func (a *App) appendPasteKey(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyRune:
+		a.pasteBuf = append(a.pasteBuf, ev.Rune())
+	case tcell.KeyEnter:
+		a.pasteBuf = append(a.pasteBuf, '\n')
+	case tcell.KeyTab:
+		a.pasteBuf = append(a.pasteBuf, '\t')
 	}
 }
 
