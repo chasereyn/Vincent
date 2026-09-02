@@ -204,3 +204,41 @@ func TestDetectViaFilesystemMissingDir(t *testing.T) {
 		t.Fatalf("missing dir should return false, not panic or true")
 	}
 }
+
+// TestBundlesNerdFontGlyphs pins the terminals Vincent trusts to render
+// Nerd Font glyphs out of the box, without any font installed. Ghostty and
+// WezTerm both bundle the symbol set into the terminal binary itself — the
+// bug this guards is a stock macOS box with only Cascadia Mono in
+// ~/Library/Fonts, where fc-list and the filesystem walk both come back
+// empty even though Ghostty renders every glyph fine.
+func TestBundlesNerdFontGlyphs(t *testing.T) {
+	cases := []struct {
+		termProgram string
+		want        bool
+	}{
+		{"ghostty", true},
+		{"WezTerm", true},
+		{"", false},
+		{"Apple_Terminal", false},
+		{"iTerm.app", false},
+		{"Ghostty", false}, // exact match only — TERM_PROGRAM is lowercase for Ghostty
+	}
+	for _, tc := range cases {
+		t.Run(tc.termProgram, func(t *testing.T) {
+			t.Setenv("TERM_PROGRAM", tc.termProgram)
+			if got := bundlesNerdFontGlyphs(); got != tc.want {
+				t.Fatalf("bundlesNerdFontGlyphs() with TERM_PROGRAM=%q = %v, want %v", tc.termProgram, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDetectShortCircuitsOnGhostty verifies Detect() itself returns true
+// under a Ghostty TERM_PROGRAM without ever needing fc-list or a real
+// font on disk — the whole point of checking the terminal first.
+func TestDetectShortCircuitsOnGhostty(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	if !Detect() {
+		t.Fatalf("Detect() under Ghostty = false, want true")
+	}
+}

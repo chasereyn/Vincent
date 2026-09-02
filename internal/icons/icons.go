@@ -11,7 +11,13 @@
 // "should I show icons?" once at startup, and "what icon for this
 // node?" per row.
 //
-// Two detection strategies, in order:
+// Three detection strategies, in order:
+//
+//  0. TERM_PROGRAM — Ghostty and WezTerm both bundle the Nerd Font symbol
+//     set inside the terminal itself, so glyphs render correctly even
+//     when the OS has no matching font installed. Checked first because
+//     the two strategies below can only see what's installed, not what
+//     the terminal can draw.
 //
 //  1. fc-list — if the system has fontconfig (most Linux installs and
 //     macOS users with Homebrew fontconfig), grep its font listing for
@@ -56,16 +62,48 @@ func Resolve(mode config.IconsMode) bool {
 	}
 }
 
-// Detect reports whether a Nerd Font is installed on this system.
-// Tries fc-list first (fast, accurate), falls back to a filesystem
-// walk if fontconfig isn't present. Returns false on any error
-// rather than propagating — the caller's only question is "icons
-// or no icons", and the safe answer when we can't tell is "no".
+// Detect reports whether a Nerd Font is installed on this system, or
+// whether the terminal itself already renders Nerd Font glyphs without
+// one being installed.
+//
+// Checked in order:
+//
+//  1. TERM_PROGRAM — Ghostty and WezTerm both bundle the Nerd Font symbol
+//     set inside the terminal binary itself and render private-use glyphs
+//     regardless of what fonts the OS has installed. On a stock macOS
+//     install with only Cascadia Mono in ~/Library/Fonts, fc-list finds
+//     nothing and the filesystem walk below finds nothing either, so
+//     without this check Ghostty users see icons silently turned off even
+//     though every glyph would have rendered fine.
+//  2. fc-list (fast, accurate where fontconfig is present).
+//  3. Filesystem walk, as a last resort.
+//
+// Returns false on any error rather than propagating — the caller's only
+// question is "icons or no icons", and the safe answer when we can't tell
+// is "no".
 func Detect() bool {
+	if bundlesNerdFontGlyphs() {
+		return true
+	}
 	if detectViaFcList() {
 		return true
 	}
 	return detectViaFilesystem()
+}
+
+// bundlesNerdFontGlyphs reports whether the terminal Vincent is running
+// under ships Nerd Font symbols in its own glyph set, independent of
+// which fonts the OS has installed. Ghostty and WezTerm both do this —
+// each vendors the Nerd Font Symbols-Only patch and renders it regardless
+// of the configured font, so checking TERM_PROGRAM answers the question
+// fc-list and the filesystem walk cannot: they only see what's installed,
+// not what the terminal itself can draw.
+func bundlesNerdFontGlyphs() bool {
+	switch os.Getenv("TERM_PROGRAM") {
+	case "ghostty", "WezTerm":
+		return true
+	}
+	return false
 }
 
 // detectViaFcList shells out to fc-list and looks for any family name
