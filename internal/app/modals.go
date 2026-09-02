@@ -69,8 +69,7 @@ func (a *App) closeAllModals() {
 	a.contextItems = nil
 	a.promptCallback = nil
 	a.confirmCallback = nil
-	a.dirtySaveCallback = nil
-	a.dirtyDiscardCallback = nil
+	a.dirtyButtons = nil
 	a.confirmInfo = false
 	a.confirmMessageLines = nil
 	a.confirmInfoScroll = 0
@@ -641,26 +640,39 @@ func confirmInfoLineStyle(th theme.Theme, bg tcell.Color, line string) tcell.Sty
 // Save / Discard / Cancel modal (unsaved-changes prompt)
 // -----------------------------------------------------------------------------
 
-// dirtyModalWidth and dirtyModalHeight pin the unsaved-changes modal's
-// geometry. Wider than the Yes/No confirm so the three buttons sit
-// comfortably on one row with breathing space between them.
+// dirtyModalWidth and dirtyModalHeight pin the geometry of the decision
+// modal. The width holds the widest button row it has to draw — Cancel /
+// Show diff / Reload / Overwrite, the conflict prompt — with a margin
+// either side. It was 60 while three buttons were the most it ever showed.
 const (
-	dirtyModalWidth  = 60
+	dirtyModalWidth  = 68
 	dirtyModalHeight = 9
 )
 
-// Button column origins for the dirty-close modal, kept in one place so
-// the draw function and the click hit-tester agree on geometry. The
-// buttons are laid out as: [ Cancel ] [ Discard ] [ Save ]; spacing is
-// chosen to center the trio inside the 60-cell modal.
+// dirtyBtnGap is the blank space between adjacent buttons. Four cells is
+// wide enough that a mouse aiming at Reload cannot land on Overwrite.
+const dirtyBtnGap = 4
+
+// dirtyTone selects a button's foreground. It is an enum rather than a
+// tcell.Color so the palette stays in theme.Theme and a button declared at
+// open time cannot cache a stale colour.
+type dirtyTone int
+
 const (
-	dirtyBtnCancelX  = 5
-	dirtyBtnCancelW  = 10 // "[ Cancel ]"
-	dirtyBtnDiscardX = 22
-	dirtyBtnDiscardW = 11 // "[ Discard ]"
-	dirtyBtnSaveX    = 42
-	dirtyBtnSaveW    = 8 // "[ Save ]"
+	dirtyToneNeutral dirtyTone = iota // Cancel — the safe way out.
+	dirtyToneDanger                   // discards somebody's work.
+	dirtyToneAccent                   // the productive, non-destructive option.
 )
+
+// dirtyButton is one button in the decision modal's row. Making the labels
+// and the actions data is what lets the conflict prompt reuse this modal
+// wholesale instead of growing a second one beside it: same keyboard
+// routing, same hit-testing, same painter.
+type dirtyButton struct {
+	label  string
+	tone   dirtyTone
+	action func(*App)
+}
 
 // openDirtyClose shows the unsaved-changes modal. saveCB runs when the
 // user picks Save (typically: save the tab(s), then proceed); discardCB
@@ -669,13 +681,24 @@ const (
 // stray Enter is non-destructive — same safety pattern the delete confirm
 // uses.
 func (a *App) openDirtyClose(title, message string, saveCB, discardCB func(*App)) {
+	a.openDirtyButtons(title, message, []dirtyButton{
+		{label: "Cancel", tone: dirtyToneNeutral},
+		{label: "Discard", tone: dirtyToneDanger, action: discardCB},
+		{label: "Save", tone: dirtyToneAccent, action: saveCB},
+	})
+}
+
+// openDirtyButtons is the general form: any button row, any actions. The
+// first button is the one focus lands on, so callers must put the
+// non-destructive escape there — an accidental Enter has to be harmless.
+// A nil action means "just dismiss", which is what Cancel is.
+func (a *App) openDirtyButtons(title, message string, buttons []dirtyButton) {
 	a.closeAllModals()
 	a.dirtyOpen = true
 	a.dirtyTitle = title
 	a.dirtyMessage = message
-	a.dirtyHover = 0 // Cancel
-	a.dirtySaveCallback = saveCB
-	a.dirtyDiscardCallback = discardCB
+	a.dirtyHover = 0
+	a.dirtyButtons = buttons
 }
 
 // dirtyCancel dismisses the modal without running anything.
@@ -683,50 +706,28 @@ func (a *App) dirtyCancel() {
 	a.closeAllModals()
 }
 
-// dirtyDiscard runs the discard callback and dismisses the modal. The
-// callback is captured before the close so closeAllModals can clear the
-// pointer without losing the handler we're about to fire.
-func (a *App) dirtyDiscard() {
-	if !a.dirtyOpen {
-		return
-	}
-	cb := a.dirtyDiscardCallback
-	a.closeAllModals()
-	if cb != nil {
-		cb(a)
-	}
-}
-
-// dirtySave runs the save callback and dismisses the modal. Same
-// capture-then-close pattern as dirtyDiscard.
-func (a *App) dirtySave() {
-	if !a.dirtyOpen {
-		return
-	}
-	cb := a.dirtySaveCallback
-	a.closeAllModals()
-	if cb != nil {
-		cb(a)
-	}
-}
-
-// dirtyActivate runs the focused button's action — used by Enter and by
-// keyboard-driven activations.
+// dirtyActivate runs the focused button's action and dismisses the modal.
+// The action is captured before the close so closeAllModals can clear the
+// button slice without losing the handler we are about to fire.
 func (a *App) dirtyActivate() {
-	switch a.dirtyHover {
-	case 0:
-		a.dirtyCancel()
-	case 1:
-		a.dirtyDiscard()
-	case 2:
-		a.dirtySave()
+	if !a.dirtyOpen {
+		return
+	}
+	var act func(*App)
+	if a.dirtyHover >= 0 && a.dirtyHover < len(a.dirtyButtons) {
+		act = a.dirtyButtons[a.dirtyHover].action
+	}
+	a.closeAllModals()
+	if act != nil {
+		act(a)
 	}
 }
 
-// handleDirtyKey processes keyboard input while the dirty-close modal
-// is open. Left/Right and Tab cycle focus across the three buttons;
-// Enter activates the focused button; Esc cancels.
+// handleDirtyKey processes keyboard input while the decision modal is
+// open. Left/Right and Tab cycle focus across the buttons; Enter
+// activates the focused button; Esc cancels.
 func (a *App) handleDirtyKey(ev *tcell.EventKey) {
+	n := len(a.dirtyButtons)
 	switch ev.Key() {
 	case tcell.KeyEsc:
 		a.dirtyCancel()
@@ -737,23 +738,24 @@ func (a *App) handleDirtyKey(ev *tcell.EventKey) {
 			a.dirtyHover--
 		}
 	case tcell.KeyRight:
-		if a.dirtyHover < 2 {
+		if a.dirtyHover < n-1 {
 			a.dirtyHover++
 		}
 	case tcell.KeyTab:
-		a.dirtyHover = (a.dirtyHover + 1) % 3
+		if n > 0 {
+			a.dirtyHover = (a.dirtyHover + 1) % n
+		}
 	}
 }
 
-// handleDirtyMouse processes mouse input for the dirty-close modal.
+// handleDirtyMouse processes mouse input for the decision modal.
 // Hovering a button highlights it; clicking activates. A click outside
 // the modal cancels — same as the confirm modal.
 func (a *App) handleDirtyMouse(x, y int, btn tcell.ButtonMask) {
 	mx, my, mw, mh := a.dirtyModalRect()
 	// Hover tracking — works for any move with a button bit set or not.
 	if x >= mx && x < mx+mw && y == my+5 {
-		switch idx := dirtyButtonAtRelX(x - mx); idx {
-		case 0, 1, 2:
+		if idx := a.dirtyButtonAtRelX(x - mx); idx >= 0 {
 			a.dirtyHover = idx
 		}
 	}
@@ -765,29 +767,55 @@ func (a *App) handleDirtyMouse(x, y int, btn tcell.ButtonMask) {
 		return
 	}
 	if y == my+5 {
-		switch dirtyButtonAtRelX(x - mx) {
-		case 0:
-			a.dirtyCancel()
-		case 1:
-			a.dirtyDiscard()
-		case 2:
-			a.dirtySave()
+		if idx := a.dirtyButtonAtRelX(x - mx); idx >= 0 {
+			a.dirtyHover = idx
+			a.dirtyActivate()
 		}
 	}
 }
 
-// dirtyButtonAtRelX maps an x offset within the modal to a button index
-// (0=Cancel, 1=Discard, 2=Save) or -1 when the offset misses every
-// button. Pulled out so the keyboard-free hover and the click handler
-// share one geometry source.
-func dirtyButtonAtRelX(rx int) int {
-	switch {
-	case rx >= dirtyBtnCancelX && rx < dirtyBtnCancelX+dirtyBtnCancelW:
-		return 0
-	case rx >= dirtyBtnDiscardX && rx < dirtyBtnDiscardX+dirtyBtnDiscardW:
-		return 1
-	case rx >= dirtyBtnSaveX && rx < dirtyBtnSaveX+dirtyBtnSaveW:
-		return 2
+// dirtyButtonLayout returns the x offset (relative to the modal's left
+// edge) and the width of every button, centring the row. Computed rather
+// than pinned to constants because the row length now depends on the
+// labels — and computed in ONE place so the painter and the hit-tester
+// cannot disagree about where a button is.
+func (a *App) dirtyButtonLayout() (xs, widths []int) {
+	total := 0
+	widths = make([]int, len(a.dirtyButtons))
+	for i, b := range a.dirtyButtons {
+		widths[i] = runeLen(dirtyButtonLabel(b.label))
+		total += widths[i]
+	}
+	if len(a.dirtyButtons) > 1 {
+		total += dirtyBtnGap * (len(a.dirtyButtons) - 1)
+	}
+	x := (dirtyModalWidth - total) / 2
+	if x < 1 {
+		x = 1
+	}
+	xs = make([]int, len(a.dirtyButtons))
+	for i := range a.dirtyButtons {
+		xs[i] = x
+		x += widths[i] + dirtyBtnGap
+	}
+	return xs, widths
+}
+
+// dirtyButtonLabel wraps a label in the bracket decoration every button in
+// this codebase wears, so the width math and the draw agree by
+// construction.
+func dirtyButtonLabel(label string) string {
+	return "[ " + label + " ]"
+}
+
+// dirtyButtonAtRelX maps an x offset within the modal to a button index,
+// or -1 when the offset misses every button.
+func (a *App) dirtyButtonAtRelX(rx int) int {
+	xs, widths := a.dirtyButtonLayout()
+	for i := range xs {
+		if rx >= xs[i] && rx < xs[i]+widths[i] {
+			return i
+		}
 	}
 	return -1
 }
@@ -808,7 +836,9 @@ func (a *App) dirtyModalRect() (x, y, w, h int) {
 	return
 }
 
-// drawDirtyClose renders the Save / Discard / Cancel modal.
+// drawDirtyClose renders the decision modal — Save / Discard / Cancel when
+// closing a dirty tab, Cancel / Show diff / Reload / Overwrite on a
+// disk conflict.
 //
 // Rows (relY):
 //
@@ -817,7 +847,7 @@ func (a *App) dirtyModalRect() (x, y, w, h int) {
 //	2   divider
 //	3   blank
 //	4   message (centered)
-//	5   buttons    [ Cancel ]    [ Discard ]    [ Save ]
+//	5   buttons    (a centred row, laid out by dirtyButtonLayout)
 //	6   blank
 //	7   blank
 //	8   bottom border
@@ -847,11 +877,20 @@ func (a *App) drawDirtyClose() {
 	mxText := mx + (mw-runeLen(msg))/2
 	drawAt(a.screen, mxText, my+4, msg, bodyStyle)
 
-	// Buttons. Cancel is neutral, Discard is red (destructive),
-	// Save is the editor's accent so it reads as the productive default.
-	drawButton(a.screen, mx+dirtyBtnCancelX, my+5, "[ Cancel ]", bg, a.theme.Text, a.dirtyHover == 0)
-	drawButton(a.screen, mx+dirtyBtnDiscardX, my+5, "[ Discard ]", bg, a.theme.Error, a.dirtyHover == 1)
-	drawButton(a.screen, mx+dirtyBtnSaveX, my+5, "[ Save ]", bg, a.theme.Accent, a.dirtyHover == 2)
+	// Buttons. Neutral is plain text (Cancel — the safe way out), danger
+	// is red (it discards somebody's work, the user's or the agent's), and
+	// accent is the productive option.
+	xs, _ := a.dirtyButtonLayout()
+	for i, b := range a.dirtyButtons {
+		fg := a.theme.Text
+		switch b.tone {
+		case dirtyToneDanger:
+			fg = a.theme.Error
+		case dirtyToneAccent:
+			fg = a.theme.Accent
+		}
+		drawButton(a.screen, mx+xs[i], my+5, dirtyButtonLabel(b.label), bg, fg, a.dirtyHover == i)
+	}
 
 	a.screen.HideCursor()
 }

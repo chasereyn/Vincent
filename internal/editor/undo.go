@@ -24,7 +24,10 @@
 
 package editor
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // maxUndoEntries caps the per-tab stack depth. 500 is generous enough
 // that typical editing sessions never hit the wall; once we do, the
@@ -175,6 +178,32 @@ func (t *Tab) CanRevert() bool {
 	return false
 }
 
+// DiskUnchangedSince reports whether content — the bytes just read off
+// disk — is identical to the snapshot taken when the file was opened or
+// last reloaded. The reconcile loop asks this before calling a newer mtime
+// a conflict.
+//
+// It exists because agents and formatters bump mtime without changing a
+// byte all the time: a gofmt -w over an already-formatted file, a tool that
+// rewrites a file it decided not to alter. Warning on those means warning
+// constantly, and a warning that cries wolf is one the user learns to
+// ignore — which would defeat the whole conflict model. The snapshot is
+// already in memory, so the comparison costs nothing but the file read.
+func (t *Tab) DiskUnchangedSince(content []byte) bool {
+	return string(content) == strings.Join(t.undoOriginal.Lines, "\n")
+}
+
+// clearConflictIfClean drops a pending conflict once the buffer no longer
+// carries unsaved edits — an undo or a revert took the user back to what
+// was loaded. There is nothing left to protect at that point, and the
+// reconcile loop picks the disk version up on its next pass because
+// detecting a conflict deliberately leaves Mtime behind.
+func (t *Tab) clearConflictIfClean() {
+	if !t.Dirty {
+		t.Conflict = false
+	}
+}
+
 // Undo restores the previous snapshot. Returns true when a step was
 // actually undone — false lets the caller flash a "nothing to undo"
 // message. The current state is moved onto the redo stack first so a
@@ -192,6 +221,7 @@ func (t *Tab) Undo() bool {
 
 	t.applySnapshot(prev)
 	t.Dirty = t.CanRevert()
+	t.clearConflictIfClean()
 	t.breakUndoGroup()
 	return true
 }
@@ -211,6 +241,7 @@ func (t *Tab) Redo() bool {
 
 	t.applySnapshot(next)
 	t.Dirty = t.CanRevert()
+	t.clearConflictIfClean()
 	t.breakUndoGroup()
 	return true
 }
@@ -232,6 +263,7 @@ func (t *Tab) RevertFile() bool {
 	t.redoStack = nil
 	t.applySnapshot(t.undoOriginal)
 	t.Dirty = t.CanRevert() // false now — buffer matches original
+	t.clearConflictIfClean()
 	t.breakUndoGroup()
 	return true
 }

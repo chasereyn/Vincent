@@ -379,17 +379,18 @@ type App struct {
 	confirmMessageLines []string
 	confirmInfoScroll   int
 
-	// Save/Discard/Cancel modal — used when closing a dirty tab or
-	// quitting with unsaved changes. dirtyHover indexes the button row:
-	// 0 = Cancel (safe default for an accidental Enter), 1 = Discard,
-	// 2 = Save. Save and Discard run the corresponding callbacks; Cancel
-	// just dismisses.
-	dirtyOpen            bool
-	dirtyTitle           string
-	dirtyMessage         string
-	dirtyHover           int
-	dirtySaveCallback    func(*App)
-	dirtyDiscardCallback func(*App)
+	// The decision modal — a title, a one-line message, and a row of
+	// buttons. Used when closing a dirty tab or quitting with unsaved
+	// changes (Cancel / Discard / Save) and when a save runs into a file
+	// that changed on disk (Cancel / Show diff / Reload / Overwrite).
+	// dirtyHover indexes dirtyButtons; index 0 is always the safe option,
+	// because that is where focus starts and an accidental Enter has to be
+	// harmless. See modals.go for the button machinery.
+	dirtyOpen    bool
+	dirtyTitle   string
+	dirtyMessage string
+	dirtyHover   int
+	dirtyButtons []dirtyButton
 
 	// Right-click context menu over the file tree.
 	contextOpen  bool
@@ -450,7 +451,28 @@ type App struct {
 	// SIGTERM. Held so a normal exit can unregister it. See shutdown.go.
 	signalStop chan os.Signal
 
+	// pasting / pasteBuf carry a bracketed paste while it is arriving.
+	// The terminal wraps a paste in EventPaste{Start} … EventPaste{End}
+	// and delivers the body as ordinary key events in between, so every
+	// keystroke inside that window is DATA, never a command: handleKey
+	// appends to pasteBuf and returns without arming the Esc leader or
+	// touching the buffer. Without this an Esc byte in pasted text arms
+	// the leader and the next 'q' quits mid-paste. The whole buffer is
+	// inserted once at End() so an N-line paste is one undo step.
+	pasting  bool
+	pasteBuf []rune
+
 	quit bool
+}
+
+// initScreenInput turns on the input modes both constructors need. Mouse
+// events are the obvious half; bracketed paste is the half that is easy to
+// forget, and forgetting it is a data-loss bug rather than a missing
+// feature — see the pasting field above. Factored out so a test can hand
+// in a recording screen and prove both calls happen.
+func initScreenInput(scr tcell.Screen) {
+	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	scr.EnablePaste()
 }
 
 // New initialises the screen and mouse, builds the file tree at rootDir,
@@ -463,7 +485,7 @@ func New(rootDir string) (*App, error) {
 	if err := scr.Init(); err != nil {
 		return nil, err
 	}
-	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	initScreenInput(scr)
 
 	th := theme.Default()
 	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
@@ -526,7 +548,7 @@ func NewSingleFile(filePath string) (*App, error) {
 	if err := scr.Init(); err != nil {
 		return nil, err
 	}
-	scr.EnableMouse(tcell.MouseButtonEvents | tcell.MouseDragEvents | tcell.MouseMotionEvents)
+	initScreenInput(scr)
 
 	th := theme.Default()
 	scr.SetStyle(tcell.StyleDefault.Background(th.BG).Foreground(th.Text))
@@ -710,6 +732,8 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.handleKey(e)
 	case *tcell.EventMouse:
 		a.handleMouse(e)
+	case *tcell.EventPaste:
+		a.handlePaste(e)
 	case *autoScrollEvent:
 		a.handleAutoScroll()
 	case *quitEvent:
@@ -748,12 +772,28 @@ func (a *App) refreshTreeNow() {
 // mtime to what the tab last knew, and reacts:
 //
 //   - File missing  → flash once, mark the tab dirty so the user knows.
-//   - Disk newer, tab clean → reload the buffer silently, flash success.
-//   - Disk newer, tab dirty → leave the buffer alone, flash a warning
-//     that saving will overwrite.
+//   - Disk newer, tab clean → reload the buffer, silently.
+//   - Disk newer, tab dirty, same bytes → just take the new mtime.
+//   - Disk newer, tab dirty, different bytes → record a conflict, flash
+//     once, and leave the buffer alone. Save then refuses until the user
+//     picks Overwrite or Reload.
 //
 // Untitled tabs (Path == "") are skipped because there's no disk file to
 // reconcile against.
+//
+// Two things here are load-bearing and easy to undo by accident:
+//
+// A conflicted tab keeps its OLD Mtime. The flag, not the timestamp, is
+// what suppresses the re-flash — which is the whole bug this replaced:
+// advancing Mtime to stop the warning repeating also erased the only
+// record that a conflict existed, and the next Save overwrote the agent
+// with no prompt. Leaving Mtime behind has a second payoff: if the user
+// undoes their way back to a clean buffer the conflict clears, and the
+// next tick sees the disk as still newer and reloads it.
+//
+// The byte comparison is not an optimisation. Agents and formatters bump
+// mtime without changing content constantly, and a warning that fires on
+// those is one the user stops reading.
 func (a *App) reconcileOpenTabsWithDisk() {
 	for _, tab := range a.tabs {
 		if tab.Path == "" {
@@ -791,17 +831,31 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			continue // unchanged on disk.
 		}
 		if tab.Dirty {
-			a.flash(fmt.Sprintf("%s changed on disk — your edits will overwrite on save",
+			if tab.Conflict {
+				// Already recorded and already announced. Skipping here
+				// is also what keeps the file read below off the tick for
+				// as long as the conflict stands.
+				continue
+			}
+			data, readErr := os.ReadFile(tab.Path)
+			if readErr == nil && tab.DiskUnchangedSince(data) {
+				// Same bytes as when we loaded it: something rewrote the
+				// file without changing it. Not a conflict.
+				tab.Mtime = info.ModTime()
+				continue
+			}
+			tab.Conflict = true
+			a.flash(fmt.Sprintf("%s changed on disk — save will ask before overwriting",
 				filepath.Base(tab.Path)))
-			// Update Mtime so we don't re-flash every tick for the same change.
-			tab.Mtime = info.ModTime()
 			continue
 		}
 		if err := tab.Reload(); err != nil {
 			a.flash(fmt.Sprintf("%s reload failed: %v", filepath.Base(tab.Path), err))
-			continue
 		}
-		a.flash(fmt.Sprintf("%s reloaded from disk", filepath.Base(tab.Path)))
+		// No flash on success. A clean tab reloading when the agent writes
+		// is the normal case in this workflow, and a flash per write is
+		// constant noise during exactly the stretch you are reading. Same
+		// call diff tabs already made — see reconcileDiffTab.
 	}
 }
 
@@ -923,6 +977,15 @@ func (a *App) menuModalRect() (x, y, w, h int) {
 // only "command" key is Esc, which closes the menu and acts as the leader
 // for the hotkey table in leader.go (Esc s = Save, Esc u = Undo, etc.).
 func (a *App) handleKey(ev *tcell.EventKey) {
+	// A bracketed paste is in flight: every key between EventPaste{Start}
+	// and EventPaste{End} is pasted text, not a command. This branch is
+	// first for exactly that reason — an Esc byte in the middle of a paste
+	// must not arm the leader, because the next character is very likely a
+	// letter, and 'q' would quit mid-paste.
+	if a.pasting {
+		a.appendPasteKey(ev)
+		return
+	}
 	// Secondary modals own the keyboard while they're up. Each handler
 	// understands Esc (cancel), Enter (submit / activate), and the keys
 	// relevant to its layout (text editing for the prompt, arrow keys for
@@ -1071,6 +1134,65 @@ func (a *App) applyEditKey(tab *editor.Tab, ev *tcell.EventKey) {
 		tab.InsertString(tab.IndentUnit)
 	case tcell.KeyRune:
 		tab.InsertRune(ev.Rune())
+	}
+}
+
+// handlePaste consumes a bracketed paste. Start() opens the window and
+// resets the accumulator; End() closes it and delivers the whole payload
+// in a single InsertString, which is what makes an N-line paste one undo
+// step instead of N, and what keeps a literal tab in the pasted text a tab
+// rather than the buffer's IndentUnit.
+//
+// A paste is only ever accepted by an editable text buffer. Any overlay
+// that owns the keyboard (the menu, a modal, the find bar, the file finder)
+// and any read-only tab discard it with a flash instead — delivering it
+// would either leak the text into a surface that cannot hold it or, on a
+// diff tab, write diff text over the user's source.
+func (a *App) handlePaste(ev *tcell.EventPaste) {
+	if ev.Start() {
+		a.pasting = true
+		a.pasteBuf = a.pasteBuf[:0]
+		return
+	}
+	if !a.pasting {
+		return // End with no Start — nothing was accumulated.
+	}
+	a.pasting = false
+	text := string(a.pasteBuf)
+	a.pasteBuf = a.pasteBuf[:0]
+	if text == "" {
+		return
+	}
+	if a.anyModalOpen() {
+		a.flash("Paste ignored — close the open panel first")
+		return
+	}
+	tab := a.activeTabPtr()
+	if tab == nil {
+		a.flash("Paste ignored — no file open")
+		return
+	}
+	if tab.ReadOnly() {
+		a.flash(fmt.Sprintf("Paste ignored — %s is read-only", tab.DisplayName()))
+		return
+	}
+	tab.InsertString(text)
+}
+
+// appendPasteKey folds one key event into the in-flight paste buffer.
+// Runes go in as themselves, Enter as "\n", Tab as "\t"; everything else
+// — arrows, function keys, and a bare Esc — is dropped. Dropping Esc is
+// the point of the whole mechanism: it is data here, not the leader key,
+// and a terminal in bracketed-paste mode filters real escape sequences out
+// of the payload anyway, so nothing legible is lost.
+func (a *App) appendPasteKey(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyRune:
+		a.pasteBuf = append(a.pasteBuf, ev.Rune())
+	case tcell.KeyEnter:
+		a.pasteBuf = append(a.pasteBuf, '\n')
+	case tcell.KeyTab:
+		a.pasteBuf = append(a.pasteBuf, '\t')
 	}
 }
 
@@ -1698,6 +1820,13 @@ func (a *App) saveTabAt(idx int) bool {
 		a.flash("Saving untitled tabs is not supported yet")
 		return false
 	}
+	if tab.Conflict {
+		// The file moved under us. Do not write — ask. Returning false
+		// aborts whatever this save was a step of (a close, a quit), which
+		// is right: the user has a decision to make first.
+		a.openConflictPrompt(idx)
+		return false
+	}
 	if err := tab.Save(); err != nil {
 		a.flash(fmt.Sprintf("Save failed: %v", err))
 		return false
@@ -2036,13 +2165,15 @@ func (a *App) menuSaveAndClose() {
 	if tab == nil || tab.Path == "" {
 		return
 	}
-	if err := tab.Save(); err != nil {
-		a.flash(fmt.Sprintf("Save failed: %v", err))
+	// Through saveTabAt rather than tab.Save so a conflicted tab gets the
+	// Overwrite / Reload prompt here too. Save-and-close was the one path
+	// that bypassed it.
+	idx := a.activeTab
+	if !a.saveTabAt(idx) {
 		return
 	}
-	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s — closed", filepath.Base(tab.Path)))
-	a.closeTab(a.activeTab)
+	a.closeTab(idx)
 }
 
 // menuClose closes the active tab via the same dirty-tab confirmation flow
@@ -2313,8 +2444,14 @@ func (a *App) drawTabBar() {
 		}
 		tab := a.tabs[r.Index]
 		col := r.X + 1
-		if tab.Dirty {
-			a.screen.SetContent(col, ty, '●', nil, st.Foreground(a.theme.Modified))
+		if tab.Dirty || tab.Conflict {
+			// One dot, two states. Conflict outranks dirty: both mean
+			// "unsaved", but only one of them can lose an agent's work.
+			dot := a.theme.Modified
+			if tab.Conflict {
+				dot = a.theme.Conflict
+			}
+			a.screen.SetContent(col, ty, '●', nil, st.Foreground(dot))
 		}
 		col += 2 // skip dirty slot.
 		// Per-language Nerd Font glyph between the dirty dot and the
@@ -2484,7 +2621,13 @@ func (a *App) drawStatusBar() {
 		} else {
 			lang := detectLangLabel(tab.Path)
 			dirty := ""
-			if tab.Dirty {
+			switch {
+			case tab.Conflict:
+				// Spelled out rather than left to the dot's colour: the
+				// flash that announced this expires after three seconds
+				// and the state does not.
+				dirty = " · ● changed on disk"
+			case tab.Dirty:
 				dirty = " · ●"
 			}
 			left = fmt.Sprintf(" %s · Ln %d, Col %d · %d lines%s",

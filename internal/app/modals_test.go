@@ -1108,21 +1108,125 @@ func TestDirtyTabCount(t *testing.T) {
 }
 
 // TestDirtyButtonAtRelX_HitsAndMisses pins the geometry helper so the
-// click rect math stays in sync with the draw layout.
+// click rect math stays in sync with the draw layout. Both come from
+// dirtyButtonLayout, so the test walks that layout: the first cell of
+// every button hits it, the last cell still hits it, one cell past the
+// end misses, and column 0 (the modal border) misses everything.
 func TestDirtyButtonAtRelX_HitsAndMisses(t *testing.T) {
-	cases := []struct {
-		rx   int
-		want int
-	}{
-		{dirtyBtnCancelX + 1, 0},
-		{dirtyBtnDiscardX + 1, 1},
-		{dirtyBtnSaveX + 1, 2},
-		{0, -1},
-		{dirtyBtnSaveX + dirtyBtnSaveW + 5, -1},
+	a := newTestApp(t, t.TempDir())
+	a.openDirtyClose("T", "M", func(*App) {}, func(*App) {})
+
+	xs, widths := a.dirtyButtonLayout()
+	if len(xs) != 3 {
+		t.Fatalf("expected 3 buttons, got %d", len(xs))
 	}
-	for _, c := range cases {
-		if got := dirtyButtonAtRelX(c.rx); got != c.want {
-			t.Errorf("rx=%d: got %d, want %d", c.rx, got, c.want)
+	for i := range xs {
+		if got := a.dirtyButtonAtRelX(xs[i]); got != i {
+			t.Errorf("first cell of button %d: got %d", i, got)
 		}
+		if got := a.dirtyButtonAtRelX(xs[i] + widths[i] - 1); got != i {
+			t.Errorf("last cell of button %d: got %d", i, got)
+		}
+	}
+	if got := a.dirtyButtonAtRelX(0); got != -1 {
+		t.Errorf("rx=0 should miss every button, got %d", got)
+	}
+	last := len(xs) - 1
+	if got := a.dirtyButtonAtRelX(xs[last] + widths[last]); got != -1 {
+		t.Errorf("one past the last button should miss, got %d", got)
+	}
+	// Every button has to fit inside the modal, or it draws off the edge
+	// and cannot be clicked at all.
+	if xs[last]+widths[last] > dirtyModalWidth-1 {
+		t.Errorf("button row overflows the modal: ends at %d, width %d",
+			xs[last]+widths[last], dirtyModalWidth)
+	}
+}
+
+// TestDirtyButtonLayout_FourButtonsFit is the conflict prompt's row —
+// Cancel / Show diff / Reload / Overwrite. It is the widest row this modal
+// has to draw, and the reason dirtyModalWidth went from 60 to 68.
+func TestDirtyButtonLayout_FourButtonsFit(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a.openFile(target)
+	a.openConflictPrompt(0)
+
+	if len(a.dirtyButtons) != 4 {
+		t.Fatalf("conflict prompt should offer 4 buttons, got %d", len(a.dirtyButtons))
+	}
+	if a.dirtyHover != 0 || a.dirtyButtons[0].label != "Cancel" {
+		t.Fatalf("focus must start on Cancel; hover=%d first=%q",
+			a.dirtyHover, a.dirtyButtons[0].label)
+	}
+	xs, widths := a.dirtyButtonLayout()
+	if xs[0] < 1 {
+		t.Errorf("row starts at %d, inside the border", xs[0])
+	}
+	end := xs[3] + widths[3]
+	if end > dirtyModalWidth-1 {
+		t.Errorf("four-button row overflows: ends at %d of %d", end, dirtyModalWidth)
+	}
+	// No overlaps — a click on Reload must never activate Overwrite.
+	for i := 1; i < len(xs); i++ {
+		if xs[i] < xs[i-1]+widths[i-1] {
+			t.Errorf("button %d overlaps button %d", i, i-1)
+		}
+	}
+}
+
+// TestHandleDirtyKey_FourButtonRowNavigates proves the generalised
+// keyboard routing follows the button count rather than a hard-coded 3.
+func TestHandleDirtyKey_FourButtonRowNavigates(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	fired := ""
+	a.openDirtyButtons("T", "M", []dirtyButton{
+		{label: "Cancel"},
+		{label: "Two", action: func(*App) { fired = "two" }},
+		{label: "Three", action: func(*App) { fired = "three" }},
+		{label: "Four", action: func(*App) { fired = "four" }},
+	})
+
+	for i := 0; i < 5; i++ {
+		a.handleDirtyKey(keyEv(tcell.KeyRight, 0))
+	}
+	if a.dirtyHover != 3 {
+		t.Fatalf("Right should walk to 3 and clamp, got %d", a.dirtyHover)
+	}
+	a.handleDirtyKey(keyEv(tcell.KeyTab, 0))
+	if a.dirtyHover != 0 {
+		t.Fatalf("Tab from the last button should wrap to 0, got %d", a.dirtyHover)
+	}
+	a.handleDirtyKey(keyEv(tcell.KeyRight, 0))
+	a.handleDirtyKey(keyEv(tcell.KeyEnter, 0))
+	if fired != "two" {
+		t.Fatalf("Enter on button 1 should fire its action, got %q", fired)
+	}
+	if a.dirtyOpen {
+		t.Fatal("activating a button should dismiss the modal")
+	}
+}
+
+// TestHandleDirtyMouse_ClickActivatesButton pins the mouse path through
+// the computed layout: a click on a button's own cells runs that button.
+func TestHandleDirtyMouse_ClickActivatesButton(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	discarded := false
+	a.openDirtyClose("T", "M", func(*App) { t.Fatal("save fired on a Discard click") },
+		func(*App) { discarded = true })
+
+	mx, my, _, _ := a.dirtyModalRect()
+	xs, _ := a.dirtyButtonLayout()
+	a.handleDirtyMouse(mx+xs[1], my+5, tcell.Button1)
+
+	if !discarded {
+		t.Fatal("clicking Discard should fire the discard action")
+	}
+	if a.dirtyOpen {
+		t.Fatal("a button click should dismiss the modal")
 	}
 }

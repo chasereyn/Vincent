@@ -15,6 +15,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1968,5 +1969,395 @@ func TestDrawTabBar_NoIconWhenDisabled(t *testing.T) {
 		if len(c.Runes) > 0 && c.Runes[0] == wantGlyph {
 			t.Fatalf("did not expect glyph %q at x=%d when icons off", string(wantGlyph), x)
 		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Bracketed paste
+// -----------------------------------------------------------------------------
+
+// recordingScreen wraps a SimulationScreen and counts the input-mode calls
+// initScreenInput makes. The simulation screen stores its paste flag in an
+// unexported field with no getter, so counting the call is the only way to
+// prove bracketed paste was switched on.
+type recordingScreen struct {
+	tcell.SimulationScreen
+	mouseCalls int
+	pasteCalls int
+}
+
+// EnableMouse records the call and forwards it to the wrapped screen.
+func (s *recordingScreen) EnableMouse(flags ...tcell.MouseFlags) {
+	s.mouseCalls++
+	s.SimulationScreen.EnableMouse(flags...)
+}
+
+// EnablePaste records the call and forwards it to the wrapped screen.
+func (s *recordingScreen) EnablePaste() {
+	s.pasteCalls++
+	s.SimulationScreen.EnablePaste()
+}
+
+// TestInitScreenInput_EnablesMouseAndPaste pins the fix for the paste
+// data-loss bug at its source: both constructors go through
+// initScreenInput, and it must turn bracketed paste on. Without the
+// EnablePaste call the terminal delivers a paste as bare keystrokes and no
+// amount of handling downstream can tell them from typing.
+func TestInitScreenInput_EnablesMouseAndPaste(t *testing.T) {
+	scr := &recordingScreen{SimulationScreen: tcell.NewSimulationScreen("UTF-8")}
+	if err := scr.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	defer scr.Fini()
+
+	initScreenInput(scr)
+
+	if scr.pasteCalls != 1 {
+		t.Fatalf("EnablePaste calls: got %d, want 1", scr.pasteCalls)
+	}
+	if scr.mouseCalls != 1 {
+		t.Fatalf("EnableMouse calls: got %d, want 1", scr.mouseCalls)
+	}
+}
+
+// pasteEvents drives one whole bracketed paste through handleEvent: the
+// start marker, the body as key events, then the end marker. This is the
+// exact shape tcell delivers a paste in.
+func pasteEvents(a *App, body ...tcell.Event) {
+	a.handleEvent(tcell.NewEventPaste(true))
+	for _, ev := range body {
+		a.handleEvent(ev)
+	}
+	a.handleEvent(tcell.NewEventPaste(false))
+}
+
+// TestHandlePaste_EscAndQAreDataNotCommands is the regression test for the
+// bug: pasted text containing an escape followed by 'q' used to arm the Esc
+// leader and quit Vincent mid-paste. Inside a paste nothing dispatches —
+// the payload lands in the buffer as one undo step and the app stays put.
+//
+// An escape is dropped rather than inserted. That is not a choice so much
+// as the only reachable behaviour: tcell.NewEventKey folds a 0x1b rune into
+// KeyEsc, so an escape byte can never arrive as a rune, and a terminal in
+// bracketed-paste mode filters escape sequences out of the payload anyway.
+// What matters is that it stops being a command — everything printable
+// around it lands in the buffer verbatim.
+func TestHandlePaste_EscAndQAreDataNotCommands(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	pasteEvents(a,
+		keyEv(tcell.KeyEsc, 0),    // would have armed the leader
+		keyEv(tcell.KeyRune, 'q'), // ... and quit Vincent
+		keyEv(tcell.KeyRune, 'u'),
+		keyEv(tcell.KeyRune, 'i'),
+		keyEv(tcell.KeyEnter, 0),
+		keyEv(tcell.KeyTab, 0),
+		keyEv(tcell.KeyRune, '\x1b'), // normalised by tcell to KeyEsc
+		keyEv(tcell.KeyRune, 'z'),
+	)
+
+	if a.quit {
+		t.Fatal("a pasted Esc-q must not quit")
+	}
+	if a.dirtyOpen || a.menuOpen {
+		t.Fatal("a paste must not open any modal")
+	}
+	if a.pasting {
+		t.Fatal("End() should have closed the paste window")
+	}
+	tab := a.activeTabPtr()
+	want := "qui\n\tz" + "seed"
+	if got := tab.Buffer.String(); got != want {
+		t.Fatalf("buffer after paste: got %q, want %q", got, want)
+	}
+	if !tab.CanUndo() {
+		t.Fatal("the paste should be undoable")
+	}
+	if !tab.Undo() {
+		t.Fatal("Undo should report a step was taken")
+	}
+	if got := tab.Buffer.String(); got != "seed" {
+		t.Fatalf("one Undo should revert the whole paste; got %q", got)
+	}
+}
+
+// TestHandlePaste_ReadOnlyTabDiscards proves a paste never reaches a diff
+// tab's buffer. A diff tab carries the real file's Path, so text landing in
+// it would be one Save away from overwriting the user's source.
+func TestHandlePaste_ReadOnlyTabDiscards(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp(t, dir)
+	rows := []diff.Row{{Kind: diff.KindContext, Text: "ctx"}}
+	a.tabs = append(a.tabs, editor.NewDiffTab(filepath.Join(dir, "x.go"), rows))
+	a.activeTab = 0
+
+	pasteEvents(a, keyEv(tcell.KeyRune, 'x'))
+
+	if got := a.tabs[0].Buffer.String(); got != "ctx" {
+		t.Fatalf("read-only tab buffer changed: %q", got)
+	}
+	if !strings.Contains(a.statusMsg, "read-only") {
+		t.Fatalf("expected a read-only flash, got %q", a.statusMsg)
+	}
+}
+
+// TestHandlePaste_ModalOpenDiscards keeps pasted text out of the buffer
+// behind an overlay. The user's target when a modal is up is the modal, and
+// silently inserting into the file underneath it is the worst of both.
+func TestHandlePaste_ModalOpenDiscards(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("seed"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.openMenu()
+
+	pasteEvents(a, keyEv(tcell.KeyRune, 'x'))
+
+	if got := a.activeTabPtr().Buffer.String(); got != "seed" {
+		t.Fatalf("buffer changed behind a modal: %q", got)
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Disk reconciliation and conflicts
+// -----------------------------------------------------------------------------
+
+// conflictFixture opens a file, dirties the buffer, then rewrites the file
+// on disk with newContent and backdates the tab's Mtime so the next
+// reconcile pass sees the disk as newer. Backdating rather than sleeping
+// keeps the test instant — same trick reconcileDiffTab's tests use.
+func conflictFixture(t *testing.T, newContent string) (*App, string) {
+	t.Helper()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("alpha\nbravo\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	a.activeTabPtr().InsertString("mine\n")
+
+	if err := os.WriteFile(target, []byte(newContent), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	a.tabs[0].Mtime = a.tabs[0].Mtime.Add(-time.Hour)
+	// openFile flashes "Opened <name>"; clear it so a test can assert on
+	// what reconciling did or did not say.
+	a.statusMsg = ""
+	return a, target
+}
+
+// TestReconcile_DirtyTabWithDifferentBytesConflicts is the core of the
+// model. An agent rewrote the file while the user had unsaved edits: the
+// tab is conflicted, the buffer is untouched, and a Save refuses rather
+// than silently overwriting the agent.
+func TestReconcile_DirtyTabWithDifferentBytesConflicts(t *testing.T) {
+	a, target := conflictFixture(t, "from the agent\n")
+
+	a.reconcileOpenTabsWithDisk()
+
+	tab := a.tabs[0]
+	if !tab.Conflict {
+		t.Fatal("a dirty tab whose file changed should be conflicted")
+	}
+	if got := tab.Buffer.String(); got != "mine\nalpha\nbravo\n" {
+		t.Fatalf("the buffer must not be touched; got %q", got)
+	}
+	if err := tab.Save(); !errors.Is(err, editor.ErrDiskConflict) {
+		t.Fatalf("Save: got %v, want ErrDiskConflict", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != "from the agent\n" {
+		t.Fatalf("disk should be byte-identical after a refused save; got %q", got)
+	}
+}
+
+// TestReconcile_ConflictDoesNotReFlashOrAdvanceMtime pins the two halves
+// of the re-flash suppression. The flag, not the timestamp, is what stops
+// the warning repeating — advancing Mtime instead is exactly the bug this
+// replaced, because it erased the only record that a conflict existed.
+func TestReconcile_ConflictDoesNotReFlashOrAdvanceMtime(t *testing.T) {
+	a, _ := conflictFixture(t, "from the agent\n")
+
+	a.reconcileOpenTabsWithDisk()
+	firstMtime := a.tabs[0].Mtime
+	a.statusMsg = ""
+
+	a.reconcileOpenTabsWithDisk()
+
+	if a.statusMsg != "" {
+		t.Fatalf("a standing conflict should not re-flash; got %q", a.statusMsg)
+	}
+	if !a.tabs[0].Mtime.Equal(firstMtime) {
+		t.Fatal("a conflicted tab must keep its old Mtime")
+	}
+	if !a.tabs[0].Conflict {
+		t.Fatal("the conflict should still stand")
+	}
+}
+
+// TestReconcile_IdenticalBytesIsNotAConflict is the no-false-positives
+// half. A gofmt over an already-formatted file, or a tool that rewrites a
+// file it decided not to change, bumps mtime without changing a byte. That
+// must be silent, or the warning becomes noise the user learns to ignore.
+func TestReconcile_IdenticalBytesIsNotAConflict(t *testing.T) {
+	a, _ := conflictFixture(t, "alpha\nbravo\n") // same bytes as on open
+	before := a.tabs[0].Mtime
+
+	a.reconcileOpenTabsWithDisk()
+
+	if a.tabs[0].Conflict {
+		t.Fatal("a rewrite that changed no bytes is not a conflict")
+	}
+	if a.statusMsg != "" {
+		t.Fatalf("it should not flash either; got %q", a.statusMsg)
+	}
+	if !a.tabs[0].Mtime.After(before) {
+		t.Fatal("the new mtime should be taken so we don't re-check every tick")
+	}
+	if !a.tabs[0].Dirty {
+		t.Fatal("the user's edits are still unsaved — Dirty must stand")
+	}
+}
+
+// TestReconcile_CleanTabReloadsQuietly keeps the flash off the normal
+// case. A clean tab picking up an agent's write is what happens all day in
+// this workflow; a status flash per write is noise during exactly the
+// stretch the user is reading. Diff tabs already made this call.
+func TestReconcile_CleanTabReloadsQuietly(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(target, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	if err := os.WriteFile(target, []byte("from the agent\n"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	a.tabs[0].Mtime = a.tabs[0].Mtime.Add(-time.Hour)
+	a.statusMsg = "" // drop openFile's own flash.
+
+	a.reconcileOpenTabsWithDisk()
+
+	if got := a.tabs[0].Buffer.String(); got != "from the agent\n" {
+		t.Fatalf("a clean tab should reload; buffer is %q", got)
+	}
+	if a.statusMsg != "" {
+		t.Fatalf("a clean reload must not flash; got %q", a.statusMsg)
+	}
+	if a.tabs[0].Conflict {
+		t.Fatal("a clean reload is not a conflict")
+	}
+	// And nothing about the reload should appear on the status row.
+	a.draw()
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.Show()
+	if row := statusRowText(t, a); strings.Contains(row, "reloaded") {
+		t.Fatalf("status row should not mention a reload; got %q", row)
+	}
+}
+
+// statusRowText reads the status bar back off the simulation screen as a
+// string, so a test can assert on what the user would actually see.
+func statusRowText(t *testing.T, a *App) string {
+	t.Helper()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+	_, sy, _, _ := a.statusRect()
+	var b strings.Builder
+	for x := 0; x < w; x++ {
+		c := cells[sy*w+x]
+		if len(c.Runes) > 0 {
+			b.WriteRune(c.Runes[0])
+		}
+	}
+	return b.String()
+}
+
+// TestDrawTabBar_ConflictDotUsesTheConflictColour is the visual half of
+// the model: one dot, two states, conflict outranking dirty. If both
+// states painted the same colour the warning would be invisible.
+func TestDrawTabBar_ConflictDotUsesTheConflictColour(t *testing.T) {
+	a, _ := conflictFixture(t, "from the agent\n")
+
+	// Dirty but not yet conflicted — the dot is the Modified amber.
+	a.drawTabBar()
+	a.screen.Show()
+	if got := dotColour(t, a); got != a.theme.Modified {
+		t.Fatalf("dirty dot colour: got %v, want Modified %v", got, a.theme.Modified)
+	}
+
+	a.reconcileOpenTabsWithDisk()
+	a.drawTabBar()
+	a.screen.Show()
+	if got := dotColour(t, a); got != a.theme.Conflict {
+		t.Fatalf("conflicted dot colour: got %v, want Conflict %v", got, a.theme.Conflict)
+	}
+}
+
+// dotColour finds the tab bar's dirty dot and returns its foreground.
+func dotColour(t *testing.T, a *App) tcell.Color {
+	t.Helper()
+	cells, w, _ := a.screen.(tcell.SimulationScreen).GetContents()
+	_, ty, _, _ := a.tabBarRect()
+	for x := 0; x < w; x++ {
+		c := cells[ty*w+x]
+		if len(c.Runes) > 0 && c.Runes[0] == '●' {
+			fg, _, _ := c.Style.Decompose()
+			return fg
+		}
+	}
+	t.Fatal("no dirty dot found in the tab bar")
+	return 0
+}
+
+// TestDrawStatusBar_ConflictSaysChangedOnDisk pins the wording. The flash
+// that announced the conflict expires after three seconds; the state does
+// not, so the status bar has to keep saying it.
+func TestDrawStatusBar_ConflictSaysChangedOnDisk(t *testing.T) {
+	a, _ := conflictFixture(t, "from the agent\n")
+	a.reconcileOpenTabsWithDisk()
+	// Step past the flash so the status bar shows tab state, not a message.
+	a.statusUntil = time.Now().Add(-time.Second)
+
+	a.draw()
+	a.screen.Show()
+
+	row := statusRowText(t, a)
+	if !strings.Contains(row, "● changed on disk") {
+		t.Fatalf("status row should say the file changed on disk; got %q", row)
+	}
+}
+
+// TestSaveTabAt_ConflictedOpensThePromptAndWritesNothing is the
+// load-bearing refusal: the save the user asked for turns into a question.
+func TestSaveTabAt_ConflictedOpensThePromptAndWritesNothing(t *testing.T) {
+	a, target := conflictFixture(t, "from the agent\n")
+	a.reconcileOpenTabsWithDisk()
+
+	if a.saveTabAt(0) {
+		t.Fatal("saveTabAt should report failure on a conflicted tab")
+	}
+	if !a.dirtyOpen {
+		t.Fatal("it should have opened the conflict prompt")
+	}
+	if a.dirtyTitle != "Changed on disk" {
+		t.Fatalf("prompt title: %q", a.dirtyTitle)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "from the agent\n" {
+		t.Fatalf("nothing should have been written; disk holds %q", got)
 	}
 }

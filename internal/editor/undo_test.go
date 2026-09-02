@@ -513,3 +513,93 @@ func TestBufferContentsAfterMixedHistory(t *testing.T) {
 		t.Fatal("trailing junk crept into restored buffer")
 	}
 }
+
+// TestDiskUnchangedSince_ComparesAgainstTheOnOpenSnapshot pins the check
+// that stops false conflicts. Agents and formatters rewrite files without
+// changing a byte all the time; those must not warn.
+func TestDiskUnchangedSince_ComparesAgainstTheOnOpenSnapshot(t *testing.T) {
+	tab := newScratchTab("alpha\nbravo\n")
+
+	if !tab.DiskUnchangedSince([]byte("alpha\nbravo\n")) {
+		t.Fatal("identical bytes should read as unchanged")
+	}
+	if tab.DiskUnchangedSince([]byte("alpha\nBRAVO\n")) {
+		t.Fatal("different bytes should read as changed")
+	}
+	// The user's own edits must not move the baseline: the snapshot is what
+	// was READ, not what is in the buffer now. Otherwise a dirty buffer
+	// would compare against itself and every conflict would hide.
+	tab.InsertString("mine\n")
+	if !tab.DiskUnchangedSince([]byte("alpha\nbravo\n")) {
+		t.Fatal("editing the buffer must not move the on-open snapshot")
+	}
+}
+
+// TestDiskUnchangedSince_EmptyFile guards the round-trip: an empty file
+// loads as one empty line, and joining that back has to give "" again
+// rather than a stray newline that would read as a change.
+func TestDiskUnchangedSince_EmptyFile(t *testing.T) {
+	tab := newScratchTab("")
+	if !tab.DiskUnchangedSince(nil) {
+		t.Fatal("an empty file should compare equal to its own snapshot")
+	}
+	if !tab.DiskUnchangedSince([]byte("")) {
+		t.Fatal("empty bytes should compare equal too")
+	}
+}
+
+// TestUndoToCleanClearsConflict covers the sticky conflict flag's release
+// valve. Once the buffer no longer carries edits there is nothing left to
+// protect, and the reconcile loop takes the disk version on its next pass
+// because detecting the conflict deliberately left Mtime behind.
+func TestUndoToCleanClearsConflict(t *testing.T) {
+	tab := newScratchTab("alpha\n")
+	tab.InsertString("mine\n")
+	tab.Conflict = true
+
+	if !tab.Undo() {
+		t.Fatal("Undo should report a step")
+	}
+	if tab.Dirty {
+		t.Fatal("the buffer should be clean again")
+	}
+	if tab.Conflict {
+		t.Fatal("a clean buffer should not stay conflicted")
+	}
+}
+
+// TestRevertFileClearsConflict is the same release valve via the Revert
+// action rather than Undo.
+func TestRevertFileClearsConflict(t *testing.T) {
+	tab := newScratchTab("alpha\n")
+	tab.InsertString("mine\n")
+	tab.Conflict = true
+
+	if !tab.RevertFile() {
+		t.Fatal("RevertFile should report a change")
+	}
+	if tab.Conflict {
+		t.Fatal("Revert should clear the conflict along with the dirty flag")
+	}
+}
+
+// TestRedoBackToDirtyKeepsConflictCleared pins the asymmetry that follows
+// from the above: redoing the edit makes the buffer dirty again but does
+// NOT resurrect the conflict. The reconcile tick is what re-detects it, and
+// it will, because Mtime is still the pre-conflict one.
+func TestRedoBackToDirtyKeepsConflictCleared(t *testing.T) {
+	tab := newScratchTab("alpha\n")
+	tab.InsertString("mine\n")
+	tab.Conflict = true
+	tab.Undo()
+
+	if !tab.Redo() {
+		t.Fatal("Redo should report a step")
+	}
+	if !tab.Dirty {
+		t.Fatal("Redo should make the buffer dirty again")
+	}
+	if tab.Conflict {
+		t.Fatal("Redo should not resurrect the conflict on its own")
+	}
+}
