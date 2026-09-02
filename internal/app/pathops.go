@@ -73,7 +73,6 @@ func absolutePathFor(path string) string {
 // actually receives the clipboard write, regardless of where the editor
 // is running.
 func (a *App) menuCopyRelativePath() {
-	a.closeMenu()
 	tab := a.activeTabPtr()
 	if tab == nil || tab.Path == "" {
 		return
@@ -85,7 +84,6 @@ func (a *App) menuCopyRelativePath() {
 // system clipboard. Useful when pasting the path into a shell on the same
 // remote machine (e.g. another pane running the agent).
 func (a *App) menuCopyAbsolutePath() {
-	a.closeMenu()
 	tab := a.activeTabPtr()
 	if tab == nil || tab.Path == "" {
 		return

@@ -48,13 +48,12 @@ func newTestApp(t *testing.T, root string) *App {
 		t.Fatalf("tree: %v", err)
 	}
 	a := &App{
-		screen:         scr,
-		theme:          theme.Default(),
-		rootDir:        tree.Root.Path,
-		tree:           tree,
-		hoveredMenuRow: -1,
-		sidebarShown:   true,
-		sidebarWidth:   defaultSidebarWidth,
+		screen:       scr,
+		theme:        theme.Default(),
+		rootDir:      tree.Root.Path,
+		tree:         tree,
+		sidebarShown: true,
+		sidebarWidth: defaultSidebarWidth,
 		// Mirror the real constructors. A zero width here silently makes
 		// gitPanelW() return 0 even with the panel shown, so every panel
 		// test would assert against a panel that never drew.
@@ -159,46 +158,6 @@ func TestStatusRect(t *testing.T) {
 	x, y, w, h := a.statusRect()
 	if x != 0 || y != a.height-1 || w != a.width || h != 1 {
 		t.Fatalf("status rect: (%d,%d,%d,%d)", x, y, w, h)
-	}
-}
-
-// TestMenuButtonRect places the ≡ button at the start of the tab bar and
-// shifts left when the sidebar is hidden.
-func TestMenuButtonRect(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	x, _, w, _ := a.menuButtonRect()
-	if x != defaultSidebarWidth || w != menuButtonWidth {
-		t.Fatalf("shown menuButtonRect: x=%d w=%d", x, w)
-	}
-	a.sidebarShown = false
-	x, _, _, _ = a.menuButtonRect()
-	if x != 0 {
-		t.Fatalf("hidden menuButtonRect should sit at column 0: got %d", x)
-	}
-}
-
-// TestMenuModalRect centers the modal in the window and clamps the origin
-// to (0,0) when the window is too small to fit it.
-func TestMenuModalRect_Centered(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	x, y, w, h := a.menuModalRect()
-	_, _, expectedH := a.menuLayout()
-	if w != modalWidth || h != expectedH {
-		t.Fatalf("modal size: got (%d,%d), want (%d,%d)", w, h, modalWidth, expectedH)
-	}
-	if x != (a.width-modalWidth)/2 || y != (a.height-expectedH)/2 {
-		t.Fatalf("modal origin off-center: (%d,%d)", x, y)
-	}
-}
-
-// TestMenuModalRect_ClampsTinyWindow ensures the origin never goes negative
-// even if the window is smaller than the modal.
-func TestMenuModalRect_ClampsTinyWindow(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.width, a.height = 10, 5
-	x, y, _, _ := a.menuModalRect()
-	if x != 0 || y != 0 {
-		t.Fatalf("expected clamped origin (0,0), got (%d,%d)", x, y)
 	}
 }
 
@@ -481,79 +440,6 @@ func TestSidebarToggleLabel(t *testing.T) {
 	}
 }
 
-// TestMenuMoveSelection_WrapsAroundEnds simulates a small menu with all rows
-// enabled to verify wrapping in both directions.
-func TestMenuMoveSelection_WrapsAroundEnds(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	// Open every potential gate: a savable tab + selection + clipboard.
-	tmp := filepath.Join(a.rootDir, "f.txt")
-	if err := os.WriteFile(tmp, []byte("hello"), 0644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a.openFile(tmp)
-	tab := a.activeTabPtr()
-	tab.Anchor = editor.Position{Line: 0, Col: 0}
-	tab.Cursor = editor.Position{Line: 0, Col: 1}
-	a.clipBuf = "x"
-
-	// Count the rows currently enabled so we know how many forward
-	// steps land us back at the starting row (vs going past it). A
-	// hard-coded len breaks every time the menu grows.
-	items, _, _ := a.menuLayout()
-	enabled := 0
-	for _, item := range items {
-		if item.enabled(a) {
-			enabled++
-		}
-	}
-	if enabled < 2 {
-		t.Fatalf("need at least 2 enabled items to test wrap; got %d", enabled)
-	}
-
-	// Walk forward exactly `enabled` steps and land on the first row.
-	a.hoveredMenuRow = -1
-	a.menuMoveSelection(1)
-	first := a.hoveredMenuRow
-	for i := 1; i < enabled; i++ {
-		a.menuMoveSelection(1)
-	}
-	a.menuMoveSelection(1) // wrap
-	if a.hoveredMenuRow != first {
-		t.Fatalf("forward wrap: got %d, want %d", a.hoveredMenuRow, first)
-	}
-
-	// Same for backward.
-	a.hoveredMenuRow = -1
-	a.menuMoveSelection(-1)
-	last := a.hoveredMenuRow
-	for i := 1; i < enabled; i++ {
-		a.menuMoveSelection(-1)
-	}
-	a.menuMoveSelection(-1) // wrap
-	if a.hoveredMenuRow != last {
-		t.Fatalf("backward wrap: got %d, want %d", a.hoveredMenuRow, last)
-	}
-}
-
-// TestMenuMoveSelection_NothingEnabledYieldsMinusOne lands on -1 when no row
-// is enabled (we synthesise that by setting every predicate to false-ish via
-// the no-tab/no-clipboard initial state, except always-true rows).
-func TestMenuMoveSelection_SkipsDisabled(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	// No tabs, no selection, no clipboard. Save/Close/Rename/Delete/Copy/
-	// Cut/Paste are all disabled. New file / toggle / quit stay enabled.
-	a.hoveredMenuRow = -1
-	a.menuMoveSelection(1)
-	if a.hoveredMenuRow < 0 {
-		t.Fatal("expected a row to land somewhere")
-	}
-	idx := a.hoveredMenuRow
-	items, _, _ := a.menuLayout()
-	if !items[idx].enabled(a) {
-		t.Fatalf("landed on disabled row %d", idx)
-	}
-}
-
 // TestFlash sets statusMsg and pushes statusUntil into the future.
 func TestFlash(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
@@ -622,17 +508,6 @@ func TestMenuToggleLineComment_Unsupported(t *testing.T) {
 	}
 	if a.statusMsg != "No line comment syntax for this file" {
 		t.Fatalf("statusMsg = %q", a.statusMsg)
-	}
-}
-
-// TestTabBarClick_OpensMenu clicks the ≡ button cell and verifies the menu
-// opens.
-func TestTabBarClick_OpensMenu(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	mx, _, _, _ := a.menuButtonRect()
-	a.tabBarClick(mx, 0)
-	if !a.menuOpen {
-		t.Fatal("clicking ≡ should open menu")
 	}
 }
 
@@ -770,28 +645,6 @@ func TestPasteClipboard_NoTab(t *testing.T) {
 	a.pasteClipboard() // no tab — nothing to paste into.
 }
 
-// TestMenuSaveAndClose saves then closes the active tab.
-func TestMenuSaveAndClose(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "sc.txt")
-	if err := os.WriteFile(target, []byte("seed"), 0644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a := newTestApp(t, dir)
-	a.openFile(target)
-	a.activeTabPtr().InsertString("Y")
-	a.menuSaveAndClose()
-	if len(a.tabs) != 0 {
-		t.Fatalf("expected tab closed; got %d tabs", len(a.tabs))
-	}
-}
-
-// TestMenuSaveAndClose_NoTab is a no-op when nothing is open.
-func TestMenuSaveAndClose_NoTab(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.menuSaveAndClose()
-}
-
 // TestMenuClickPaths covers menuSave/menuCopy/menuCut/menuPaste/menuClose
 // menuQuit and menuRefreshTree as one-liners.
 func TestMenuClickPaths(t *testing.T) {
@@ -808,23 +661,17 @@ func TestMenuClickPaths(t *testing.T) {
 	tab.Anchor = editor.Position{Line: 0, Col: 0}
 	tab.Cursor = editor.Position{Line: 0, Col: 2}
 
-	a.menuOpen = true
 	a.menuSave()
-	a.menuOpen = true
 	a.menuCopy()
-	a.menuOpen = true
 	tab.Anchor = editor.Position{Line: 0, Col: 0}
 	tab.Cursor = editor.Position{Line: 0, Col: 1}
 	a.menuCut()
-	a.menuOpen = true
 	a.menuPaste()
-	a.menuOpen = true
 	a.menuRefreshTree()
 
 	// Clean the tab before quitting; the dirty-quit path is exercised
 	// separately in dirty_modal_test.go.
 	tab.Dirty = false
-	a.menuOpen = true
 	a.menuQuit()
 	if !a.quit {
 		t.Fatal("menuQuit should set quit flag")
@@ -848,11 +695,8 @@ func TestUndoRedoRevert_MenuPaths(t *testing.T) {
 	if a.hasUndo() || a.hasRedo() || a.hasRevert() {
 		t.Fatal("freshly opened tab should have no history")
 	}
-	a.menuOpen = true
 	a.menuUndo()
-	a.menuOpen = true
 	a.menuRedo()
-	a.menuOpen = true
 	a.menuRevert()
 
 	// One edit → undo + revert become available.
@@ -865,7 +709,6 @@ func TestUndoRedoRevert_MenuPaths(t *testing.T) {
 		t.Fatal("redo should still be empty")
 	}
 
-	a.menuOpen = true
 	a.menuUndo()
 	if got := tab.Buffer.String(); got != "seed" {
 		t.Fatalf("after menuUndo = %q, want seed", got)
@@ -874,19 +717,16 @@ func TestUndoRedoRevert_MenuPaths(t *testing.T) {
 		t.Fatal("redo should be populated after an undo")
 	}
 
-	a.menuOpen = true
 	a.menuRedo()
 	if got := tab.Buffer.String(); got != "seedX" {
 		t.Fatalf("after menuRedo = %q, want seedX", got)
 	}
 
 	// Revert back to original; then Undo must recover the post-edit state.
-	a.menuOpen = true
 	a.menuRevert()
 	if got := tab.Buffer.String(); got != "seed" {
 		t.Fatalf("after menuRevert = %q, want seed", got)
 	}
-	a.menuOpen = true
 	a.menuUndo()
 	if got := tab.Buffer.String(); got != "seedX" {
 		t.Fatalf("after undo-of-revert = %q, want seedX", got)
@@ -898,11 +738,8 @@ func TestUndoRedoRevert_MenuPaths(t *testing.T) {
 // return rather than dereferencing nil.
 func TestUndoRedoRevert_NoTabSafelyNoOps(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.menuOpen = true
 	a.menuUndo()
-	a.menuOpen = true
 	a.menuRedo()
-	a.menuOpen = true
 	a.menuRevert()
 	if a.hasUndo() || a.hasRedo() || a.hasRevert() {
 		t.Fatal("no-tab predicates should all be false")
@@ -912,83 +749,7 @@ func TestUndoRedoRevert_NoTabSafelyNoOps(t *testing.T) {
 // TestMenuClose_NoTab safely no-ops.
 func TestMenuClose_NoTab(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.menuOpen = true
 	a.menuClose()
-}
-
-// TestMenuActivate_RunsHovered runs the action attached to the highlighted
-// row.
-func TestMenuActivate_RunsHovered(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openMenu()
-	// Force highlight onto the sidebar-toggle row (always enabled, label
-	// supplied dynamically via labelFor), then activate.
-	items, _, _ := a.menuLayout()
-	for i, item := range items {
-		if item.labelFor != nil && item.label == "" && item.action != nil {
-			// labelFor + empty static label is the marker for the toggle
-			// row. The newFile row also uses labelFor, so disambiguate by
-			// flipping the sidebar and checking afterward.
-			a.hoveredMenuRow = i
-			a.menuActivate()
-			a.openMenu()
-		}
-	}
-	// Re-find and run the toggle row via its dynamic label.
-	a.hoveredMenuRow = -1
-	items, _, _ = a.menuLayout()
-	for i, item := range items {
-		if item.labelFor != nil && (item.labelFor(a) == "Show file explorer" || item.labelFor(a) == "Hide file explorer") {
-			a.hoveredMenuRow = i
-			break
-		}
-	}
-	if a.hoveredMenuRow < 0 {
-		t.Fatal("could not find sidebar-toggle row")
-	}
-	before := a.sidebarShown
-	a.menuActivate()
-	if a.sidebarShown == before {
-		t.Fatal("expected sidebarShown to flip after menuActivate")
-	}
-}
-
-// TestMenuActivate_OutOfRange and disabled rows are no-ops.
-func TestMenuActivate_OutOfRange(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.hoveredMenuRow = -1
-	a.menuActivate()
-	a.hoveredMenuRow = 999
-	a.menuActivate()
-}
-
-// TestUpdateMenuHover snaps to the right row when over an enabled row, and
-// to -1 when outside.
-func TestUpdateMenuHover(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openMenu()
-	mx, my, _, _ := a.menuModalRect()
-
-	// Find an always-enabled row and click on its relY.
-	items, _, _ := a.menuLayout()
-	var pickIdx, pickRelY int
-	for i, item := range items {
-		if item.enabled(a) {
-			pickIdx = i
-			pickRelY = item.relY
-			break
-		}
-	}
-	a.updateMenuHover(mx+5, my+pickRelY)
-	if a.hoveredMenuRow != pickIdx {
-		t.Fatalf("hoveredMenuRow: got %d, want %d", a.hoveredMenuRow, pickIdx)
-	}
-
-	// Outside the modal → -1.
-	a.updateMenuHover(0, 0)
-	if a.hoveredMenuRow != -1 {
-		t.Fatalf("outside modal: got %d", a.hoveredMenuRow)
-	}
 }
 
 // TestScrollAt routes scroll to the panel under the cursor; we just verify
@@ -1234,41 +995,9 @@ func TestHandleKey_EscDoesNotOpenMenu(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	for i := 0; i < 3; i++ {
 		a.handleKey(keyEv(tcell.KeyEsc, 0))
-		if a.menuOpen {
-			t.Fatalf("Esc press %d opened the menu", i+1)
+		if a.cheatsheetOpen {
+			t.Fatalf("Esc press %d opened an overlay", i+1)
 		}
-	}
-}
-
-// TestHandleKey_MenuNavKeys move highlight and Enter activates.
-func TestHandleKey_MenuNavKeys(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openMenu()
-	first := a.hoveredMenuRow
-	a.handleKey(keyEv(tcell.KeyDown, 0))
-	if a.hoveredMenuRow == first {
-		t.Fatal("Down should advance highlight")
-	}
-	a.handleKey(keyEv(tcell.KeyUp, 0))
-	if a.hoveredMenuRow != first {
-		t.Fatalf("Up should return to %d, got %d", first, a.hoveredMenuRow)
-	}
-}
-
-// TestHandleKey_MenuShortcutAfterNavigation keeps menu shortcut letters live
-// after arrow-key navigation has moved the highlighted row.
-func TestHandleKey_MenuShortcutAfterNavigation(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openMenu()
-
-	a.handleKey(keyEv(tcell.KeyDown, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'p'))
-
-	if a.menuOpen {
-		t.Fatal("Esc-p from the open menu should close the menu")
-	}
-	if !a.finderOpen {
-		t.Fatal("Esc-p from the open menu should open the project finder")
 	}
 }
 
@@ -1436,14 +1165,14 @@ func TestHandleMouse_ShiftStickyForWheel(t *testing.T) {
 	}
 }
 
-// TestHandleMouse_RightClickOpensMenu falls back to the main menu when the
+// TestHandleMouse_RightClickOpensCheatsheet falls back to the key table when the
 // right-click isn't on a tree row.
-func TestHandleMouse_RightClickOpensMenu(t *testing.T) {
+func TestHandleMouse_RightClickOpensCheatsheet(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	ev := tcell.NewEventMouse(60, 5, tcell.Button3, tcell.ModNone)
+	ev := tcell.NewEventMouse(90, 5, tcell.Button3, tcell.ModNone)
 	a.handleMouse(ev)
-	if !a.menuOpen {
-		t.Fatal("right-click outside tree should open the main menu")
+	if !a.cheatsheetOpen {
+		t.Fatal("right-click on nothing in particular should open the cheatsheet")
 	}
 }
 
@@ -1483,48 +1212,6 @@ func TestHandleMouse_SidebarSplitterDrag(t *testing.T) {
 	a.handleMouse(ev)
 }
 
-// TestHandleMenuMouse_ClicksRowAndOutside both fires the row action and
-// dismisses on outside click.
-func TestHandleMenuMouse_ClicksRowAndOutside(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openMenu()
-	mx, my, _, _ := a.menuModalRect()
-	// Click on the sidebar toggle row — flips the sidebar.
-	items, _, _ := a.menuLayout()
-	toggleRelY := -1
-	for _, item := range items {
-		if item.labelFor != nil && item.labelFor(a) == "Hide file explorer" {
-			toggleRelY = item.relY
-			break
-		}
-	}
-	if toggleRelY < 0 {
-		t.Fatal("sidebar toggle row not found")
-	}
-	before := a.sidebarShown
-	a.handleMenuMouse(mx+5, my+toggleRelY, tcell.Button1)
-	if a.sidebarShown == before {
-		t.Fatal("expected toggle to fire")
-	}
-
-	// Click outside — closes.
-	a.openMenu()
-	a.handleMenuMouse(0, 0, tcell.Button1)
-	if a.menuOpen {
-		t.Fatal("outside click should close menu")
-	}
-}
-
-// TestHandleMenuMouse_NoButtonIsNoop ignores motion-only events.
-func TestHandleMenuMouse_NoButtonIsNoop(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.openMenu()
-	a.handleMenuMouse(0, 0, 0)
-	if !a.menuOpen {
-		t.Fatal("motion-only event should not close menu")
-	}
-}
-
 // TestDraw_AllPanels exercises the drawing path so the stdout/screen code
 // is covered. Result correctness is exercised manually; here we just make
 // sure no panics across several states.
@@ -1540,9 +1227,9 @@ func TestDraw_AllPanels(t *testing.T) {
 	a.draw() // with a tab
 	a.activeTabPtr().Dirty = true
 	a.draw() // dirty marker
-	a.openMenu()
-	a.draw() // with menu modal
-	a.closeMenu()
+	a.openCheatsheet()
+	a.draw() // with the key cheatsheet up
+	a.closeCheatsheet()
 	a.openPrompt("T", "H", "x", nil)
 	a.draw()
 	a.promptCancel()
@@ -1626,121 +1313,7 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestMenuLayout_Baseline pins down the modal geometry so an accidental
-// off-by-one in the layout helper is caught. The numbers dropped from
-// spice-edit's when Vincent went read-only: New file / Rename file /
-// Delete file / Rename folder / Delete folder left the File actions
-// group, taking five rows with them. The Review group then arrived with
-// View diff and the changes-panel toggle. The 2026-09-02 key rework added a
-func TestMenuLayout_Baseline(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	items, dividers, h := a.menuLayout()
-
-	if h != 32 {
-		t.Errorf("modalHeight = %d, want 32", h)
-	}
-	if got := len(items); got != 21 {
-		t.Errorf("item count = %d, want 21 built-ins", got)
-	}
-	wantDiv := []int{2, 6, 9, 15, 18, 21, 26, 29}
-	if len(dividers) != len(wantDiv) {
-		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
-	}
-	for i, d := range wantDiv {
-		if dividers[i] != d {
-			t.Errorf("dividers[%d] = %d, want %d", i, dividers[i], d)
-		}
-	}
-}
-
-// TestMenuLayout_ToggleLineCommentRow confirms "Toggle line comment" is no
-// longer a row in the ≡ menu — the phase-5 tab-bar/menu-trim pass demoted
-// it to the editor's right-click context menu alongside Revert file — and
-// that it's reachable there instead, gated by the same hasCommentableTab
-// predicate the old menu row used.
-func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(target, []byte("package main"), 0644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a := newTestApp(t, dir)
-
-	items, _, _ := a.menuLayout()
-	for _, it := range items {
-		if it.label == "Toggle line comment" {
-			t.Fatal("Toggle line comment should no longer be a ≡ menu row")
-		}
-	}
-
-	// No active tab: the editor context menu has nothing to offer.
-	if a.openEditorContext(0, 0) {
-		t.Fatal("openEditorContext should find nothing with no active tab")
-	}
-
-	a.openFile(target)
-	if !a.openEditorContext(0, 0) {
-		t.Fatal("openEditorContext should open for a commentable .go tab")
-	}
-	found := false
-	for _, it := range a.contextItems {
-		if it.label == "Toggle line comment" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("Toggle line comment should be reachable from the editor context menu")
-	}
-}
-
-// TestMenuLayout_Shortcuts pins the right-side hint text shown in the action
-// menu to the Esc-leader bindings that are meant to be discoverable there.
-// Revert file and Toggle line comment are deliberately absent — the
-// phase-5 tab-bar/menu-trim pass moved both to the editor's right-click
-// context menu (see TestMenuLayout_ToggleLineCommentRow).
-func TestMenuLayout_Shortcuts(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	want := map[string]string{}
-
-	items, _, _ := a.menuLayout()
-	seen := make(map[string]string, len(items))
-	for _, item := range items {
-		label := item.label
-		if item.labelFor != nil {
-			label = item.labelFor(a)
-		}
-		seen[label] = item.shortcut
-	}
-	for label, shortcut := range want {
-		if got, ok := seen[label]; !ok {
-			t.Errorf("menu item %q not found", label)
-		} else if got != shortcut {
-			t.Errorf("%s shortcut = %q, want %q", label, got, shortcut)
-		}
-	}
-}
-
-// TestDrawMenu_RightAlignsShortcuts verifies the shortcut column is painted at
-// the modal's right edge instead of being appended to the command label.
-func TestDrawMenu_RightAlignsShortcuts(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.drawMenu()
-	a.screen.Show()
-
-	mx, my, mw, _ := a.menuModalRect()
-	save := menuItemByLabel(t, a, "Save")
-	shortcutX := mx + mw - 2 - runeLen(save.shortcut)
-	line := screenLine(a.screen.(tcell.SimulationScreen), my+save.relY)
-	lineRunes := []rune(line)
-	if got := string(lineRunes[shortcutX : shortcutX+runeLen(save.shortcut)]); got != save.shortcut {
-		t.Fatalf("right shortcut = %q, want %q on line %q", got, save.shortcut, line)
-	}
-	if strings.Contains(string(lineRunes[mx+4:shortcutX-1]), save.shortcut) {
-		t.Fatalf("shortcut should not be appended to label area: %q", line)
-	}
-}
-
-// TestTrimRunes covers the menu-label clipping helper so long dynamic labels
+// TestTrimRunes covers the label clipping helper so long dynamic labels
 // cannot overwrite the right-aligned shortcut column.
 func TestTrimRunes(t *testing.T) {
 	tests := []struct {
@@ -1761,20 +1334,6 @@ func TestTrimRunes(t *testing.T) {
 			}
 		})
 	}
-}
-
-// menuItemByLabel finds a menu row by static label for tests that care about
-// one action without hard-coding its row index.
-func menuItemByLabel(t *testing.T, a *App, label string) menuItemDef {
-	t.Helper()
-	items, _, _ := a.menuLayout()
-	for _, item := range items {
-		if item.label == label {
-			return item
-		}
-	}
-	t.Fatalf("menu item %q not found", label)
-	return menuItemDef{}
 }
 
 // screenLine returns one row from a SimulationScreen as a fixed-width string.
@@ -1866,65 +1425,6 @@ func TestHasTree_TrueAndFalse(t *testing.T) {
 	if a.hasTree() {
 		t.Fatal("expected hasTree=false when tree is nil")
 	}
-}
-
-// TestMenuLayout_HidesSidebarToggleInSingleFileMode is the contract
-// test for the single-file-mode feature: with no file tree, the
-// 'Show / Hide file explorer' row must not appear in the action
-// menu — it's nonsensical there because the sidebar isn't built.
-// With a tree present (normal mode), the row appears.
-func TestMenuLayout_HidesSidebarToggleInSingleFileMode(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-
-	// Sanity: the toggle row IS present in normal mode.
-	items, _, _ := a.menuLayout()
-	if !containsSidebarToggle(items, a) {
-		t.Fatal("expected sidebar-toggle row in normal mode")
-	}
-
-	// Simulate single-file mode by clearing the tree.
-	a.tree = nil
-	items, _, _ = a.menuLayout()
-	if containsSidebarToggle(items, a) {
-		t.Fatal("expected sidebar-toggle row to be absent when tree is nil")
-	}
-}
-
-// TestMenuLayout_NoEmptyDividerAfterFiltering guards against the
-// regression where filtering the sole item of a group out would
-// leave a dangling divider row, doubling the gap in the menu.
-func TestMenuLayout_NoEmptyDividerAfterFiltering(t *testing.T) {
-	a := newTestApp(t, t.TempDir())
-	a.tree = nil // collapses the View-toggle group to empty
-
-	_, dividers, height := a.menuLayout()
-	// Dividers must all sit strictly below the title divider (row 2)
-	// and strictly above the modal's bottom border (height-1). Two
-	// adjacent dividers (gap == 1) would mean we kept a divider for
-	// a now-empty group.
-	for i := 1; i < len(dividers); i++ {
-		if dividers[i]-dividers[i-1] < 2 {
-			t.Fatalf("dividers too close: %v (height=%d)", dividers, height)
-		}
-	}
-}
-
-// containsSidebarToggle is the menu-test helper that locates the
-// dynamic-label row whose label flips between "Show file explorer"
-// and "Hide file explorer". We match on labelFor's resolved string
-// because the sidebar-toggle row is the only one that uses those
-// exact labels.
-func containsSidebarToggle(items []menuItemDef, a *App) bool {
-	for _, it := range items {
-		if it.labelFor == nil {
-			continue
-		}
-		l := it.labelFor(a)
-		if l == "Show file explorer" || l == "Hide file explorer" {
-			return true
-		}
-	}
-	return false
 }
 
 // TestMenuToggleSidebar_NoPanicInSingleFileMode is a regression guard for
@@ -2098,7 +1598,7 @@ func TestHandlePaste_EscAndQAreDataNotCommands(t *testing.T) {
 	if a.quit {
 		t.Fatal("a pasted Esc-q must not quit")
 	}
-	if a.dirtyOpen || a.menuOpen {
+	if a.dirtyOpen || a.cheatsheetOpen {
 		t.Fatal("a paste must not open any modal")
 	}
 	if a.pasting {
@@ -2151,7 +1651,7 @@ func TestHandlePaste_ModalOpenDiscards(t *testing.T) {
 	}
 	a := newTestApp(t, dir)
 	a.openFile(target)
-	a.openMenu()
+	a.openCheatsheet()
 
 	pasteEvents(a, keyEv(tcell.KeyRune, 'x'))
 
@@ -2398,7 +1898,7 @@ func TestSaveTabAt_ConflictedOpensThePromptAndWritesNothing(t *testing.T) {
 // TestDrawTabBar_OffShowsNameNotStrip pins what row 0 looks like with
 // tabBarShown off: the active tab's name renders (so "what file am I
 // looking at" survives), but no second tab's name and no × close button
-// appear — there's no strip to click, only the ≡ button and the name.
+// appear — there's no strip to click, only the active tab's name.
 func TestDrawTabBar_OffShowsNameNotStrip(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"alpha.go", "zzz_other.go"} {
@@ -2457,31 +1957,6 @@ func TestDrawTabBar_OnShowsFullStrip(t *testing.T) {
 	}
 	if len(a.lastTabRects) != 2 {
 		t.Fatalf("lastTabRects = %d entries, want 2", len(a.lastTabRects))
-	}
-}
-
-// TestTabBarClick_OffOnlyOpensMenu pins the click contract with the strip
-// off: the ≡ button still opens the menu, but a click anywhere else on row
-// 0 — where a tab would have been — does nothing, since there's no strip
-// to switch or close.
-func TestTabBarClick_OffOnlyOpensMenu(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	a := newTestApp(t, dir)
-	a.openFile(target)
-	a.tabBarShown = false
-	a.drawTabBar() // populate (empty) lastTabRects for the off state
-
-	sw := a.sidebarW()
-	a.tabBarClick(sw+menuButtonWidth+5, 0) // past the ≡ button, where a tab would sit
-	if a.menuOpen {
-		t.Fatal("click past the ≡ button should not open the menu with the strip off")
-	}
-	if a.activeTab != 0 {
-		t.Fatalf("click with no strip should not change activeTab, got %d", a.activeTab)
 	}
 }
 

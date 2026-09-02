@@ -214,7 +214,6 @@ func (a *App) applyStartupPanelDefaults() {
 
 // menuToggleGitPanel shows or hides the Changes panel.
 func (a *App) menuToggleGitPanel() {
-	a.closeMenu()
 	a.gitPanelShown = !a.gitPanelShown
 	if a.gitPanelShown {
 		a.reflowPanels()

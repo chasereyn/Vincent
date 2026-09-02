@@ -83,7 +83,7 @@ new file), 7 (markdown), 8, 9.
   repo / branch footer. Click a row to open its diff. `Esc g`.
 - **Phase 1, inline diffs.** Dual old/new gutters, ± markers, full-width
   row tints, and a darker word-level tint on the part of a line that
-  actually changed. `Esc d`, the action menu, a file's right-click entry,
+  actually changed. `Esc d`, a file's right-click entry,
   or a click on a change bar in the editor's git gutter (which lands on
   that change in the diff). A diff tab refreshes itself when the file
   underneath changes, so it tracks a running agent without losing scroll.
@@ -103,7 +103,7 @@ Already stripped:
 `indent.go`, and the mutation half of `tab.go` (`InsertRune`, `Backspace`,
 `Delete`, dirty state, save) are live and wired: `handleKey` falls through
 to `applyEditKey` (`app.go:1060`), `Esc s` saves, `Esc u`/`Esc r` undo and
-redo, and Save / Undo / Cut / Paste are menu rows. `Tab.Mode` plus
+redo. `Tab.Mode` plus
 `Tab.ReadOnly()` (= `Mode != ""`) is the whole design: a text tab is
 mutable, a diff or image tab is not. **Guard new mutations on
 `ReadOnly()`, never on `IsImage()`** — that was the actual bug phase 1
@@ -186,12 +186,18 @@ trade them away for convenience.
    discard. Anything finer than "commit everything" belongs to lazygit,
    one Herdr pane over. The Changes panel is where the pressure to add a
    checkbox will show up first.
-5. **Esc leader only.** No `Ctrl+` chords (see conventions below), and no
-   Esc-Esc double-tap either — Chase never presses Esc by accident, so a
-   single Esc arms the leader, one letter fires, Esc again cancels. The
-   menu is a click on `≡` or `Esc m`. The proposed table is in the roadmap
-   artifact under "Keys"; it moves find to `Esc /` and redo to `Esc U` to
-   free `f` (file panel) and `r` (review).
+5. **Esc leader only, and no menu.** No `Ctrl+` chords (see conventions
+   below), and no Esc-Esc double-tap either — Chase never presses Esc by
+   accident, so a single Esc arms the leader, one letter fires, Esc again
+   cancels. **There is no ≡ action menu.** It went away on 2026-09-02
+   after the first real session ("the Esc leader works great — the menu
+   is not needed"): every row it carried was also a leader key, so it was
+   a second code path into every action, a button in the tab bar, and a
+   modal with hover and enable predicates, all to restate the key table.
+   What replaced it is `Esc ?` — a read-only cheatsheet generated from
+   `leaderBindings()` (see `cheatsheet.go`). Do not re-add a menu. If an
+   action needs discovering, give it a leader key and it appears in the
+   cheatsheet for free.
 
 ## Build
 
@@ -251,12 +257,17 @@ pattern. Do not assume local green means race-free.
 - `t.TempDir()` for filesystem state. Never write into the repo.
 - For drawing code, build a screen with
   `tcell.NewSimulationScreen("UTF-8")` and assert on `scr.GetContents()`.
-- **No `Ctrl+` shortcuts.** They fight tmux and terminal emulators — that
-  is the entire reason the action menu exists. Use `Esc`-prefixed leader
-  keys instead (see `leader.go`).
-- **Every right-click action must also live in the main menu.** macOS
-  Terminal under tmux swallows button 3. Right-click is a redundant
-  shortcut, never the only path to something.
+- **No `Ctrl+` shortcuts.** They fight tmux and terminal emulators. Use
+  `Esc`-prefixed leader keys instead (see `leader.go`).
+- **Every right-click action must also have a leader key or live in the
+  cheatsheet-visible key table.** macOS Terminal under tmux swallows
+  button 3. Right-click is a redundant shortcut, never the only path to
+  something. The table is `leaderBindings()` and the cheatsheet
+  (`Esc ?`) renders it, so a binding cannot ship undocumented — but an
+  action reachable *only* by right-click has no entry in either and is
+  therefore invisible. The four right-click-only actions today are
+  Revert file, Toggle line comment, Collapse all folders, and the
+  copy-path pair; all four are listed here on purpose.
 
 ## Patterns worth preserving
 
@@ -288,7 +299,8 @@ Each of these cost someone real time to find. Do not regress them.
 
 - **Zellij** sends Shift as a separate zero-button event *before* the wheel
   event. `handleMouse` tracks a sticky shift window to bridge it.
-- **macOS Terminal + tmux** swallows right-click — hence the menu rule above.
+- **macOS Terminal + tmux** swallows right-click — hence the
+  leader-key-or-cheatsheet rule above.
 - **Shift+mouse must no-op** so the terminal's own native selection and
   copy still work.
 - **A raw-mode TUI does not die with its terminal.** tcell puts the console

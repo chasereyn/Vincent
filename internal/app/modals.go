@@ -9,7 +9,7 @@
 // (used for Rename and New File), a Yes/No confirmation (used for Delete),
 // and the small right-click context menu that appears over the file tree.
 //
-// Each modal is mutually exclusive with the main action menu and with each
+// Each modal is mutually exclusive with the Esc-? cheatsheet and with each
 // other — opening any one calls closeAllModals() first, so we can never end
 // up with two on screen at once.
 
@@ -33,9 +33,12 @@ const (
 	confirmModalWidth  = 54
 	confirmModalHeight = 9
 
-	// contextMenuWidth is fixed so the popup geometry stays predictable —
-	// the labels are short enough to fit comfortably.
-	contextMenuWidth = 19
+	// contextMenuWidth is fixed so the popup geometry stays predictable.
+	// Sized for the longest label any of the three context menus carries
+	// ("Collapse all folders", 20 runes) plus the "▸ " chevron at +2, the
+	// label origin at +4, and one cell for the right border. The old 19
+	// clipped its own border on "Add review note".
+	contextMenuWidth = 26
 )
 
 // contextItem is one row in the tree's right-click context menu. action runs
@@ -61,7 +64,7 @@ type contextItem struct {
 // bar is closed too — opening a modal should never leave it taking
 // keystrokes underneath the modal.
 func (a *App) closeAllModals() {
-	a.menuOpen = false
+	a.cheatsheetOpen = false
 	a.promptOpen = false
 	a.confirmOpen = false
 	a.contextOpen = false
@@ -74,7 +77,6 @@ func (a *App) closeAllModals() {
 	a.findValue = nil
 	a.findCursor = 0
 	a.findScroll = 0
-	a.hoveredMenuRow = -1
 	a.contextNode = nil
 	a.contextItems = nil
 	a.promptCallback = nil
@@ -100,7 +102,7 @@ func (a *App) closeAllModals() {
 // is what the user wants), but a key/mouse handler can use this to know
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
+	return a.cheatsheetOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
 		a.findOpen || a.finderOpen || a.pickerOpen
 }
 
@@ -979,18 +981,25 @@ func (a *App) openTreeContext(n *filetree.Node, x, y int) {
 // -----------------------------------------------------------------------------
 
 // openEditorContext opens the right-click popup for the active text tab,
-// anchored near (x, y). It's the fallback home for the two actions the
-// phase-5 chrome pass demoted out of the ≡ menu — Toggle line comment and
-// Revert file — both mutating enough that a deliberate right-click on the
-// file itself is a better gate than a permanent row in the everything-menu.
-// Toggle line comment keeps its Esc-/ leader binding (leader.go, untouched
-// by this pass); Revert has no leader binding at all — this context menu
-// is now its only path, since the ≡ row is gone. Returns false, opening
-// nothing, when neither action applies to the active tab, so the caller
-// falls through to the main menu instead of popping an empty context menu.
+// anchored near (x, y). It is the home for the actions that have no leader
+// key: Toggle line comment and Revert file (both mutating enough that a
+// deliberate right-click on the file itself is a better gate than a
+// one-key reflex) and the two copy-path actions.
+//
+// The copy-path pair landed here when the ≡ menu went away. They were the
+// only menu rows that were genuinely unreachable otherwise for the file
+// you are looking at — the tree's right-click offers them for the node you
+// click, which is not the same thing when the tab you are reading was
+// opened from the Changes panel or the finder. Pasting a path into an agent
+// conversation is a constant reviewer gesture, so it needed a real home
+// rather than a deleted one.
+//
+// Returns false, opening nothing, when no action applies to the active tab,
+// so the caller falls through to the cheatsheet instead of popping an empty
+// context menu.
 //
 // contextItem's action signature takes a *filetree.Node, inherited from
-// the tree's right-click menu above. These two actions operate on
+// the tree's right-click menu above. These actions operate on
 // a.activeTabPtr() directly and ignore the node entirely — it exists here
 // only so contextActivate's "run the action if the node is non-nil" gate
 // is satisfied.
@@ -1007,6 +1016,12 @@ func (a *App) openEditorContext(x, y int) bool {
 			label:  "Revert file",
 			action: func(app *App, _ *filetree.Node) { app.menuRevert() },
 		})
+	}
+	if a.hasFileTab() {
+		items = append(items,
+			contextItem{label: "Copy rel path", plain: (*App).menuCopyRelativePath},
+			contextItem{label: "Copy abs path", plain: (*App).menuCopyAbsolutePath},
+		)
 	}
 	if len(items) == 0 {
 		return false

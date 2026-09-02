@@ -206,26 +206,28 @@ func TestHandleKey_EscEscCancelsLeader(t *testing.T) {
 		t.Fatal("first Esc should arm the leader")
 	}
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if a.menuOpen {
-		t.Fatal("Esc-Esc must not open the menu any more")
+	if a.cheatsheetOpen {
+		t.Fatal("Esc-Esc must not open an overlay")
 	}
 	if a.leaderArmed() {
 		t.Fatal("second Esc should cancel the armed leader")
 	}
 }
 
-// TestHandleKey_LeaderMenu binds Esc-m to the action menu, replacing the
-// old Esc-Esc double-tap.
-func TestHandleKey_LeaderMenu(t *testing.T) {
+// TestHandleKey_LeaderCheatsheet binds Esc-? to the key table, and pins
+// that a following Esc closes it rather than arming the leader again. That
+// second half is the whole reason the cheatsheet is routed ahead of the Esc
+// branch in handleKey.
+func TestHandleKey_LeaderCheatsheet(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'm'))
-	if !a.menuOpen {
-		t.Fatal("Esc-m should open the menu")
+	a.handleKey(keyEv(tcell.KeyRune, '?'))
+	if !a.cheatsheetOpen {
+		t.Fatal("Esc-? should open the cheatsheet")
 	}
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if a.menuOpen {
-		t.Fatal("Esc with the menu open should close it")
+	if a.cheatsheetOpen {
+		t.Fatal("Esc with the cheatsheet open should close it")
 	}
 }
 

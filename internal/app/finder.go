@@ -56,8 +56,8 @@ func (e *finderRebuiltEvent) When() time.Time { return e.when }
 // (Building when the index is already StateReady is a no-op
 // inside the orchestrator's coalesce gate.)
 func (a *App) openFinder() {
-	// Single-file mode has no project index — the menu row is already
-	// hidden (hasTree), but the Esc-p leader reaches here directly, so
+	// Single-file mode has no project index, and the Esc p leader reaches
+	// here regardless, so
 	// guard it too rather than pop an always-empty modal. tree == nil is
 	// the single-file signal (see NewSingleFile); the finder is a
 	// project-scoped feature that's omitted alongside the tree.
@@ -95,15 +95,14 @@ func (a *App) closeFinder() {
 	a.finderSelected = 0
 }
 
-// menuFindFile is the ≡ menu entry that opens the finder. Lives
+// menuFindFile opens the finder. Lives
 // alongside menuFind (which is the in-file find bar) — they share
 // vocabulary but search different scopes.
 func (a *App) menuFindFile() {
-	a.closeMenu()
 	a.openFinder()
 }
 
-// hasFinder is the menu predicate. Always true once the finder
+// hasFinder reports whether the finder can open. Always true once it
 // has been wired in App.New — the row stays enabled even before
 // the first index lands so the user can pop the modal and watch
 // "Indexing…" tick over.
@@ -212,7 +211,7 @@ func (a *App) handleFinderMouse(x, y int, btn tcell.ButtonMask) {
 	row := y - rowsStart
 	if row >= 0 && row < len(a.finderResults) && x >= mx && x < mx+mw {
 		// Hover highlight always tracks the mouse — same behaviour
-		// the action menu uses, so users can scrub through results
+		// the modals use, so users can scrub through results
 		// without clicking.
 		a.finderSelected = row
 	}
