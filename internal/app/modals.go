@@ -45,6 +45,13 @@ type contextItem struct {
 	label   string
 	action  func(*App, *filetree.Node)
 	enabled func(*App, *filetree.Node) bool
+
+	// plain is the node-free variant, for a context menu opened somewhere
+	// there is no tree node to act on — today the diff view's "Add review
+	// note". When set it takes precedence over action, which is what lets
+	// the same popup serve both surfaces instead of a second popup being
+	// invented for the editor.
+	plain func(*App)
 }
 
 // closeAllModals dismisses every modal in one shot and parks any in-flight
@@ -61,6 +68,9 @@ func (a *App) closeAllModals() {
 	a.dirtyOpen = false
 	a.findOpen = false
 	a.finderOpen = false
+	a.pickerOpen = false
+	a.pickerTargets = nil
+	a.pickerText = ""
 	a.findValue = nil
 	a.findCursor = 0
 	a.findScroll = 0
@@ -90,7 +100,8 @@ func (a *App) closeAllModals() {
 // is what the user wants), but a key/mouse handler can use this to know
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
-	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen || a.findOpen || a.finderOpen
+	return a.menuOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
+		a.findOpen || a.finderOpen || a.pickerOpen
 }
 
 // -----------------------------------------------------------------------------
@@ -144,39 +155,88 @@ func (a *App) handlePromptKey(ev *tcell.EventKey) {
 		a.promptCancel()
 	case tcell.KeyEnter:
 		a.promptSubmit()
+	default:
+		a.promptValue, a.promptCursor, _ = editRunes(a.promptValue, a.promptCursor, ev)
+	}
+}
+
+// editRunes applies one text-editing keystroke to a (value, cursor) pair
+// and returns the new pair plus whether the key was one it understood.
+//
+// Pulled out of handlePromptKey so the review composer is the same text
+// field as the prompt modal rather than a second, subtly different one.
+// The bugs a duplicated input widget produces are all of the same shape —
+// Home works in one place and not the other, a Delete at end-of-line
+// panics in exactly one of them — and they are found by users, not by
+// tests, because nobody writes the same test twice.
+//
+// handled=false means "not a text-editing key", which is how a caller
+// distinguishes a keystroke it should ignore from one that just happened
+// not to change anything (Backspace at column zero).
+func editRunes(value []rune, cursor int, ev *tcell.EventKey) (out []rune, pos int, handled bool) {
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(value) {
+		cursor = len(value)
+	}
+	switch ev.Key() {
 	case tcell.KeyLeft:
-		if a.promptCursor > 0 {
-			a.promptCursor--
+		if cursor > 0 {
+			cursor--
 		}
 	case tcell.KeyRight:
-		if a.promptCursor < len(a.promptValue) {
-			a.promptCursor++
+		if cursor < len(value) {
+			cursor++
 		}
 	case tcell.KeyHome:
-		a.promptCursor = 0
+		cursor = 0
 	case tcell.KeyEnd:
-		a.promptCursor = len(a.promptValue)
+		cursor = len(value)
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if a.promptCursor > 0 {
-			a.promptValue = append(a.promptValue[:a.promptCursor-1], a.promptValue[a.promptCursor:]...)
-			a.promptCursor--
+		if cursor > 0 {
+			value = append(value[:cursor-1], value[cursor:]...)
+			cursor--
 		}
 	case tcell.KeyDelete:
-		if a.promptCursor < len(a.promptValue) {
-			a.promptValue = append(a.promptValue[:a.promptCursor], a.promptValue[a.promptCursor+1:]...)
+		if cursor < len(value) {
+			value = append(value[:cursor], value[cursor+1:]...)
 		}
 	case tcell.KeyRune:
 		r := ev.Rune()
 		if r < 0x20 {
-			return
+			return value, cursor, false
 		}
-		next := make([]rune, 0, len(a.promptValue)+1)
-		next = append(next, a.promptValue[:a.promptCursor]...)
+		next := make([]rune, 0, len(value)+1)
+		next = append(next, value[:cursor]...)
 		next = append(next, r)
-		next = append(next, a.promptValue[a.promptCursor:]...)
-		a.promptValue = next
-		a.promptCursor++
+		next = append(next, value[cursor:]...)
+		value = next
+		cursor++
+	default:
+		return value, cursor, false
 	}
+	return value, cursor, true
+}
+
+// scrollWindow slides a single-line text field's horizontal scroll offset
+// so cursor stays inside a window of the given width, and returns the new
+// offset. Shared by the prompt modal and the review composer for the same
+// reason editRunes is: one definition of "keep the caret visible".
+func scrollWindow(cursor, scroll, width int) int {
+	if width <= 0 {
+		return 0
+	}
+	if cursor < scroll {
+		scroll = cursor
+	}
+	if cursor >= scroll+width {
+		scroll = cursor - width + 1
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	return scroll
 }
 
 // handlePromptMouse processes mouse input while the prompt modal is open.
@@ -311,19 +371,7 @@ func (a *App) drawPrompt() {
 // adjustPromptScroll keeps the cursor within the visible window of the input
 // field by sliding promptScroll left or right as needed.
 func (a *App) adjustPromptScroll(width int) {
-	if width <= 0 {
-		a.promptScroll = 0
-		return
-	}
-	if a.promptCursor < a.promptScroll {
-		a.promptScroll = a.promptCursor
-	}
-	if a.promptCursor >= a.promptScroll+width {
-		a.promptScroll = a.promptCursor - width + 1
-	}
-	if a.promptScroll < 0 {
-		a.promptScroll = 0
-	}
+	a.promptScroll = scrollWindow(a.promptCursor, a.promptScroll, width)
 }
 
 // -----------------------------------------------------------------------------
@@ -1067,6 +1115,10 @@ func (a *App) contextActivate() {
 	item := a.contextItems[a.contextHover]
 	node := a.contextNode
 	a.closeAllModals()
+	if item.plain != nil {
+		item.plain(a)
+		return
+	}
 	if item.action != nil && node != nil {
 		item.action(a, node)
 	}

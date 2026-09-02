@@ -10,6 +10,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -225,5 +226,56 @@ func TestHandleKey_LeaderMenu(t *testing.T) {
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
 	if a.menuOpen {
 		t.Fatal("Esc with the menu open should close it")
+	}
+}
+
+// TestHandleKey_LeaderReviewComposer pins the rebinding itself: Esc-r on a
+// diff opens the composer rather than redoing an edit. Without this the
+// swap could silently regress to Redo and nobody would notice until a
+// review note failed to open.
+func TestHandleKey_LeaderReviewComposer(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.tabs = append(a.tabs, newTestDiffTab())
+	a.activeTab = 0
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'r'))
+
+	if !a.composerOpen {
+		t.Fatal("Esc-r on a diff should open the review composer")
+	}
+}
+
+// TestLeaderActionForKey_EnterSendsReview pins the named-key half of the
+// leader table. Enter is not a rune, so it needs its own lookup — and the
+// send action must be reachable from it.
+func TestLeaderActionForKey_EnterSendsReview(t *testing.T) {
+	if leaderActionForKey(tcell.KeyEnter) == nil {
+		t.Fatal("Esc-Enter should be bound")
+	}
+	if leaderActionForKey(tcell.KeyTab) != nil {
+		t.Fatal("Tab should not be a named-key leader binding")
+	}
+	for _, b := range leaderKeyBindings() {
+		if leaderActionForKey(b.key) == nil {
+			t.Errorf("named binding %v resolved to nil", b.key)
+		}
+	}
+}
+
+// TestHandleKey_LeaderEnterSendsReview drives the named-key leader through
+// handleKey itself, which is the part that could regress silently: the rune
+// table is consulted first, and an early return there would leave Esc-Enter
+// dead with every unit test on leaderActionForKey still green.
+func TestHandleKey_LeaderEnterSendsReview(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyEnter, 0))
+
+	// With an empty batch the action's own precondition fires, which is
+	// exactly the observable proof that it ran at all.
+	if !strings.Contains(a.statusMsg, "No review notes") {
+		t.Fatalf("Esc-Enter should have reached sendReview; flash = %q", a.statusMsg)
 	}
 }

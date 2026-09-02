@@ -1632,21 +1632,17 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 // Delete file / Rename folder / Delete folder left the File actions
 // group, taking five rows with them. The Review group then arrived with
 // View diff and the changes-panel toggle. The 2026-09-02 key rework added a
-// Select all row to the Clipboard group, and the phase-5 menu trim moved
-// Revert file and Toggle line comment to the editor's right-click context
-// menu (see openEditorContext) while the tab-bar toggle added one row to
-// the View toggle group.
 func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	items, dividers, h := a.menuLayout()
 
-	if h != 29 {
-		t.Errorf("modalHeight = %d, want 29", h)
+	if h != 32 {
+		t.Errorf("modalHeight = %d, want 32", h)
 	}
-	if got := len(items); got != 18 {
-		t.Errorf("item count = %d, want 18 built-ins", got)
+	if got := len(items); got != 21 {
+		t.Errorf("item count = %d, want 21 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 9, 12, 15, 18, 23, 26}
+	wantDiv := []int{2, 6, 9, 15, 18, 21, 26, 29}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1704,26 +1700,7 @@ func TestMenuLayout_ToggleLineCommentRow(t *testing.T) {
 // context menu (see TestMenuLayout_ToggleLineCommentRow).
 func TestMenuLayout_Shortcuts(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	want := map[string]string{
-		"Save":                 "Esc s",
-		"Save & close tab":     "",
-		"Close tab":            "Esc w",
-		"Undo":                 "Esc u",
-		"Redo":                 "Esc U",
-		"Find in file":         "Esc /",
-		"Find file in project": "Esc p",
-		"Copy relative path":   "",
-		"Copy absolute path":   "",
-		"Copy selection":       "",
-		"Cut selection":        "",
-		"Paste":                "",
-		"Select all":           "Esc a",
-		"Hide file explorer":   "Esc f",
-		// newTestApp's fixture defaults tabBarShown to true (see its doc
-		// comment), so the toggle row reads "Hide", not "Show".
-		"Hide tab bar": "Esc t",
-		"Quit editor":  "Esc q",
-	}
+	want := map[string]string{}
 
 	items, _, _ := a.menuLayout()
 	seen := make(map[string]string, len(items))

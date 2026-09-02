@@ -33,8 +33,10 @@ import (
 const (
 	// gitPanelHeaderRows is the header block: the title and its rule.
 	gitPanelHeaderRows = 2
-	// gitPanelFooterRows is the footer block: a rule and the branch row.
-	gitPanelFooterRows = 2
+	// gitPanelBranchRows is the fixed part of the footer block: a rule
+	// and the repo / branch row. The review block below it is variable,
+	// so the total is gitPanelFooterH() rather than a constant.
+	gitPanelBranchRows = 2
 	// gitPanelIndent is how far a file row is inset from the section header
 	// above it, which is what makes the grouping readable at a glance.
 	gitPanelIndent = 2
@@ -154,6 +156,11 @@ func (a *App) reflowPanels() {
 // the repo shows up in the Changes list without the user doing anything.
 func (a *App) refreshGitPanel(snap gitSnapshot) {
 	a.gitSnap = snap
+	// The same snapshot decides which review notes have gone stale. This
+	// is the only place that knows what the changeset currently is, and
+	// running a second status just for the notes is how the two would
+	// drift. See markStaleComments — it flags, it never re-anchors.
+	a.markStaleComments(snap)
 	a.clampGitPanelScroll()
 }
 
@@ -177,7 +184,7 @@ func (a *App) clampGitPanelScroll() {
 // block and the footer block.
 func (a *App) gitPanelListH() int {
 	_, _, _, h := a.gitPanelRect()
-	h -= gitPanelHeaderRows + gitPanelFooterRows
+	h -= gitPanelHeaderRows + a.gitPanelFooterH()
 	if h < 0 {
 		return 0
 	}
@@ -230,6 +237,12 @@ func (a *App) gitPanelToggleLabel() string {
 // gitPanelClick opens the diff for the row at (x, y), if there is one.
 // Tested against the rects recorded during the last draw.
 func (a *App) gitPanelClick(_, y int) {
+	// The footer's review block is tested first. Its rows sit below the
+	// file list and are recorded by the same draw pass, so a single
+	// lookup order is enough to keep the two from claiming one row.
+	if a.reviewPanelClick(y) {
+		return
+	}
 	for _, r := range a.lastGitPanelRows {
 		if r.y == y {
 			a.openDiff(r.entry.Abs)
@@ -284,7 +297,7 @@ func (a *App) drawGitPanel() {
 
 	a.drawGitPanelHeader(x, y, w)
 	a.drawGitPanelList(x, y+gitPanelHeaderRows, w, a.gitPanelListH())
-	a.drawGitPanelFooter(x, y+h-gitPanelFooterRows, w)
+	a.drawGitPanelFooter(x, y+h-a.gitPanelFooterH(), w)
 }
 
 // drawGitPanelHeader draws the title row and the rule beneath it. The count
@@ -389,21 +402,55 @@ func (a *App) drawGitPanelRow(x, cy, w int, e gitEntry) {
 	drawClipped(a.screen, startX+used+1, cy, rest, truncateLeft(e.Dir, rest), base.Foreground(th.Subtle))
 }
 
-// drawGitPanelFooter draws the rule and the repo / branch row. This is
-// where phase 2's review-batch box lands, in place of Zed's commit box.
+// gitPanelFooterH is the height of the whole footer block: the rule and
+// branch row, plus however many rows the review block needs.
+//
+// A method rather than a constant because the review block grows with the
+// batch. Both the list height and the footer's origin go through it, so the
+// two can never disagree about where the boundary between them is.
+//
+// The result is clamped so the footer always leaves the header and at least
+// one list row standing. Without that, a long review in a short terminal
+// would push the footer's origin above the header and paint over it — the
+// Changes list is the reason the panel exists, and the review block must
+// never be able to evict it entirely.
+func (a *App) gitPanelFooterH() int {
+	want := gitPanelBranchRows + a.reviewBlockRows()
+	_, _, _, h := a.gitPanelRect()
+	if h <= 0 {
+		return want
+	}
+	max := h - gitPanelHeaderRows - 1
+	if max < gitPanelBranchRows {
+		max = gitPanelBranchRows
+	}
+	if want > max {
+		return max
+	}
+	return want
+}
+
+// drawGitPanelFooter draws the rule, the repo / branch row, and the review
+// block beneath it.
+//
+// The review block is where Zed's commit message box sits. That is the
+// substitution the whole panel was built around: Zed's footer ends in
+// "describe this change and commit it", Vincent's ends in "describe this
+// change and hand it back". Same shape, same muscle memory, opposite
+// direction. See review.go for the block itself.
 func (a *App) drawGitPanelFooter(x, y, w int) {
 	th := a.theme
 	base := tcell.StyleDefault.Background(th.SidebarBG)
 	drawRule(a.screen, x, y, w, base.Foreground(th.Subtle))
 
-	if !a.gitSnap.IsRepo {
-		return
+	if a.gitSnap.IsRepo {
+		label := a.gitSnap.RepoName
+		if a.gitSnap.Branch != "" {
+			label += " / " + a.gitSnap.Branch
+		}
+		drawClipped(a.screen, x+1, y+1, w-1, "⑂ "+label, base.Foreground(th.Accent))
 	}
-	label := a.gitSnap.RepoName
-	if a.gitSnap.Branch != "" {
-		label += " / " + a.gitSnap.Branch
-	}
-	drawClipped(a.screen, x+1, y+1, w-1, "⑂ "+label, base.Foreground(th.Accent))
+	a.drawGitPanelReview(x, y+gitPanelBranchRows, w, a.gitPanelFooterH()-gitPanelBranchRows)
 }
 
 // -----------------------------------------------------------------------------

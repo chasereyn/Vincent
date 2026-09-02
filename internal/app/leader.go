@@ -20,6 +20,8 @@
 
 package app
 
+import "github.com/gdamore/tcell/v2"
+
 // leaderBinding is one Esc-leader entry: the trigger rune and the App method
 // that fires when the user presses Esc, <rune> in quick succession. Each method
 // already handles its own preconditions — calling menuUndo with no active tab,
@@ -47,6 +49,12 @@ func leaderBindings() []leaderBinding {
 		{'u', (*App).menuUndo},
 		{'U', (*App).menuRedo},
 		{'a', (*App).menuSelectAll},
+		// 'r' is the review composer, not Redo. Vincent is a review
+		// client: writing a note is the second most common thing anyone
+		// does in it, and redo is inherited machinery on a code path that
+		// is on its way out (see CLAUDE.md). Redo keeps its menu row.
+		{'r', (*App).openReviewComposer},
+		{'y', (*App).copyReview},
 		{'w', (*App).menuClose},
 		{'q', (*App).menuQuit},
 		{'f', (*App).menuToggleSidebar},
@@ -68,6 +76,41 @@ func leaderBindings() []leaderBinding {
 func leaderActionFor(r rune) func(*App) {
 	for _, b := range leaderBindings() {
 		if b.key == r {
+			return b.action
+		}
+	}
+	return nil
+}
+
+// leaderKeyBinding is an Esc-leader entry triggered by a NAMED key rather
+// than by a rune — Esc then Enter, today. A second table rather than a
+// wider one because the rune table is what a help screen renders and what
+// the status bar's armed-leader hint is written from; folding a
+// tcell.KeyEnter into it would mean every consumer growing a special case
+// for the entry with no printable key.
+type leaderKeyBinding struct {
+	key    tcell.Key
+	action func(*App)
+}
+
+// leaderKeyBindings is the named-key half of the leader table.
+//
+// Esc-Enter sends the review batch. Enter is the right key for it: it is
+// the gesture for "commit what I have written" everywhere else in the UI,
+// and the batch IS what the reviewer has written. It cannot be a rune
+// binding because tcell reports Enter as its own key, not as '\r'.
+func leaderKeyBindings() []leaderKeyBinding {
+	return []leaderKeyBinding{
+		{tcell.KeyEnter, (*App).sendReview},
+	}
+}
+
+// leaderActionForKey looks up the App method bound to a named key in the
+// leader table, or nil when it isn't bound. Same nil-means-fall-through
+// contract as leaderActionFor.
+func leaderActionForKey(k tcell.Key) func(*App) {
+	for _, b := range leaderKeyBindings() {
+		if b.key == k {
 			return b.action
 		}
 	}

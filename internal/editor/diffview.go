@@ -205,14 +205,25 @@ func (t *Tab) renderDiff(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 	}
 
-	for screenRow := 0; screenRow < h; screenRow++ {
-		idx := t.ScrollY + screenRow
-		if idx >= len(t.DiffRows) {
-			break
-		}
-		row := t.DiffRows[idx]
+	// Walk the display list rather than the diff rows directly: overlay
+	// rows (the review composer, saved-note markers) occupy real screen
+	// rows and push the code below them down. diffDisplayCells is the
+	// single owner of that mapping — the hit-tester walks the same list.
+	caretX, caretY := -1, -1
+	for screenRow, cell := range t.diffDisplayCells(h) {
 		cy := y + screenRow
-		onCursor := idx == t.Cursor.Line
+		if cell.overlay != NoOverlay {
+			lines := t.overlayLinesFor(cell.row)
+			if cell.overlay < len(lines) {
+				if cx := drawOverlayLine(scr, x, cy, w, lines[cell.overlay]); cx >= 0 {
+					caretX, caretY = cx, cy
+				}
+			}
+			continue
+		}
+		idx := cell.row
+		row := t.DiffRows[idx]
+		onCursor := t.diffRowSelected(idx)
 
 		rowBG, wordBG, mark, markFG := diffRowColors(th, row.Kind)
 		// Context rows pick up the active-line highlight; changed rows keep
@@ -307,8 +318,37 @@ func (t *Tab) renderDiff(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 	}
 
-	// No caret: a diff has a selected row, not an insertion point.
-	scr.HideCursor()
+	// A diff has a selected row, not an insertion point — so no caret,
+	// unless an overlay asked for one. The review composer does: it is a
+	// text field, and a text field with no visible cursor reads as broken
+	// even when every keystroke is landing.
+	if caretX >= 0 {
+		scr.ShowCursor(caretX, caretY)
+	} else {
+		scr.HideCursor()
+	}
+}
+
+// diffRowSelected reports whether idx is inside the tab's selected row
+// range. A diff selects whole rows, so the range runs from the anchor's
+// line to the cursor's line inclusive, in either direction — dragging up a
+// diff must highlight the same rows as dragging down it.
+func (t *Tab) diffRowSelected(idx int) bool {
+	lo, hi := t.DiffSelectedRows()
+	return idx >= lo && idx <= hi
+}
+
+// DiffSelectedRows returns the inclusive row range currently selected in a
+// diff tab. The app reads it to know what a review note is about; exported
+// because "what is selected" is the one piece of diff state the review
+// layer genuinely needs, and re-deriving it from Cursor and Anchor at the
+// call site is how the two definitions drift apart.
+func (t *Tab) DiffSelectedRows() (int, int) {
+	lo, hi := t.Anchor.Line, t.Cursor.Line
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return lo, hi
 }
 
 // diffNumberText right-aligns a line number in width cells, or returns
@@ -338,13 +378,21 @@ func drawRunes(scr tcell.Screen, x, y, maxW int, runes []rune, style tcell.Style
 // column zero of their row so that clicking a line number still selects the
 // row — in a read-only view there is no reason for a gutter click to be a
 // dead zone.
-func (t *Tab) diffHitTest(localX, localY, _, h int) (Position, bool) {
-	if localY < 0 || localY >= h {
+func (t *Tab) diffHitTest(localX, localY, w, h int) (Position, bool) {
+	hit, ok := t.DiffHitAt(localX, localY, w, h)
+	if !ok {
 		return Position{}, false
 	}
-	line := t.ScrollY + localY
+	line := hit.Row
 	if line < 0 || line >= t.Buffer.LineCount() {
 		return Position{}, false
+	}
+	// A click on an overlay row belongs to the row it hangs under. The app
+	// claims composer and marker clicks before this runs, so what reaches
+	// here is a drag passing over an overlay — and snapping to the anchor
+	// line keeps that drag continuous instead of stalling on the box.
+	if hit.Overlay != NoOverlay {
+		return Position{Line: line, Col: 0}, true
 	}
 	gutter := diffGutterCells(t.DiffRows)
 	if localX < gutter {

@@ -32,6 +32,7 @@ import (
 	"github.com/chasereyn/vincent/internal/filetree"
 	"github.com/chasereyn/vincent/internal/finder"
 	"github.com/chasereyn/vincent/internal/icons"
+	"github.com/chasereyn/vincent/internal/review"
 	"github.com/chasereyn/vincent/internal/theme"
 	"github.com/chasereyn/vincent/internal/version"
 )
@@ -199,6 +200,9 @@ func builtinMenuGroups() [][]menuItemDef {
 		{
 			{label: "View diff", shortcut: "Esc d", action: (*App).menuViewDiff, enabled: (*App).hasDiffableTab},
 			{shortcut: "Esc g", action: (*App).menuToggleGitPanel, enabled: alwaysTrue, labelFor: (*App).gitPanelToggleLabel, visible: (*App).hasTree},
+			{label: "Add review note", shortcut: "Esc r", action: (*App).openReviewComposer, enabled: (*App).hasDiffTab},
+			{label: "Send review to agent", shortcut: "Esc ⏎", action: (*App).sendReview, enabled: (*App).hasReviewNotes},
+			{label: "Copy review to clipboard", shortcut: "Esc y", action: (*App).copyReview, enabled: (*App).hasReviewNotes},
 		},
 		// Search
 		{
@@ -467,6 +471,46 @@ type App struct {
 	// an unrelated future modal.
 	confirmCancelHook func(*App)
 
+	// Review notes — phase 3. reviewBatch is the set of notes waiting to
+	// go back to an agent; everything else here is transient UI state for
+	// the inline composer, the click snapshots recorded during the draw,
+	// and the agent picker. See review.go.
+	//
+	// composerTab is the tab the open composer belongs to, so switching
+	// tabs parks a half-written note instead of letting it eat keystrokes
+	// over an unrelated file. composerEdit is the index of the comment
+	// being edited, or -1 for a new one. The frozen fields (side, start,
+	// end, hunk, snippet) are captured when the composer opens and are
+	// never re-derived — see the never-rebase rule in review.go.
+	reviewBatch review.Batch
+
+	composerOpen    bool
+	composerTab     *editor.Tab
+	composerRow     int
+	composerFile    string
+	composerSide    review.Side
+	composerStart   int
+	composerEnd     int
+	composerHunk    int
+	composerSnippet string
+	composerKind    review.Kind
+	composerValue   []rune
+	composerCursor  int
+	composerScroll  int
+	composerEdit    int
+
+	lastReviewRows []reviewRowRect
+	lastMarkerRefs []reviewMarkerRef
+
+	// Agent picker — only opened when more than one agent is running in
+	// this herdr workspace. pickerText is the rendered batch, frozen at
+	// open so a background refresh can't change what gets sent while the
+	// reviewer is deciding.
+	pickerOpen    bool
+	pickerTargets []review.Target
+	pickerText    string
+	pickerHover   int
+
 	// signalStop is the channel startSignalWatch registered for Ctrl+C and
 	// SIGTERM. Held so a normal exit can unregister it. See shutdown.go.
 	signalStop chan os.Signal
@@ -536,6 +580,10 @@ func New(rootDir string) (*App, error) {
 		sidebarWidth:   defaultSidebarWidth,
 		gitPanelWidth:  defaultGitPanelWidth,
 		gitPanelHover:  -1,
+		// -1 is "the composer is writing a NEW note". Zero would read as
+		// "editing comment 0", which matters the moment any code path
+		// consults it without checking composerOpen first.
+		composerEdit: -1,
 	}
 	a.setActiveFolder(tree.Root.Path)
 	a.loadUserConfig()
@@ -598,6 +646,10 @@ func NewSingleFile(filePath string) (*App, error) {
 		sidebarWidth:   defaultSidebarWidth,
 		gitPanelWidth:  defaultGitPanelWidth,
 		gitPanelHover:  -1,
+		// -1 is "the composer is writing a NEW note". Zero would read as
+		// "editing comment 0", which matters the moment any code path
+		// consults it without checking composerOpen first.
+		composerEdit: -1,
 	}
 	a.setActiveFolder(rootDir)
 	a.loadUserConfig()
@@ -1104,6 +1156,18 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFinderKey(ev)
 		return
 	}
+	if a.pickerOpen {
+		a.handlePickerKey(ev)
+		return
+	}
+	// The review composer is not a modal — it lives inline in the diff —
+	// but while it is on screen it owns the keyboard, including Esc, which
+	// there means "cancel this note" rather than "arm the leader". Routed
+	// ahead of the Esc handling below for exactly that reason.
+	if a.composerActive() {
+		a.handleComposerKey(ev)
+		return
+	}
 
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
@@ -1137,6 +1201,13 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 				action(a)
 				return
 			}
+		} else if action := leaderActionForKey(ev.Key()); action != nil {
+			// Named-key leader bindings — Esc-Enter to send the review.
+			// Same fall-through contract as the rune table: an unbound
+			// key still reaches normal handling.
+			a.lastEscape = time.Time{}
+			action(a)
+			return
 		}
 	}
 	// Any other key cancels a pending Esc so a stale half-tap doesn't
@@ -1328,6 +1399,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		a.handleFinderMouse(x, y, btn)
 		return
 	}
+	if a.pickerOpen {
+		a.handlePickerMouse(x, y, btn)
+		return
+	}
 
 	if a.menuOpen {
 		a.updateMenuHover(x, y)
@@ -1359,7 +1434,7 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		if a.tryTreeContextClick(x, y) {
 			return
 		}
-		if a.tryEditorContextClick(x, y) {
+		if a.tryDiffContextClick(x, y) || a.tryEditorContextClick(x, y) {
 			return
 		}
 		a.openMenu()
@@ -1564,6 +1639,24 @@ func (a *App) tryTreeContextClick(x, y int) bool {
 	return true
 }
 
+// tryDiffContextClick opens the diff view's right-click menu when the
+// press landed on a diff row, and reports whether it did.
+//
+// Gated on the click being inside the editor body: the tab bar, the status
+// bar, and either side panel all have their own right-click behaviour, and
+// a review menu appearing over the file tree would be a surprise.
+func (a *App) tryDiffContextClick(x, y int) bool {
+	tab := a.activeTabPtr()
+	if tab == nil || !tab.IsDiff() {
+		return false
+	}
+	ex, ey, ew, eh := a.editorRect()
+	if x < ex || x >= ex+ew || y < ey || y >= ey+eh {
+		return false
+	}
+	return a.openDiffContext(tab, x, y)
+}
+
 // sidebarClick toggles a directory or opens a file when the user clicks a
 // row in the file tree. Either action also updates the editor's "active
 // folder" so the next New File from the main menu defaults to wherever
@@ -1648,6 +1741,13 @@ func (a *App) editorPress(x, y int) {
 	}
 	ex, ey, ew, eh := a.editorRect()
 	if a.openGitHunkAt(tab, x-ex, y-ey) {
+		return
+	}
+	// A press on the review composer or on a saved note's marker belongs
+	// to the review layer, not to the diff underneath it. Claimed before
+	// the hit test so clicking inside the box you are typing into doesn't
+	// move the selection out from under it.
+	if a.reviewDiffPress(tab, x-ex, y-ey) {
 		return
 	}
 	pos, ok := tab.HitTest(x-ex, y-ey, ew, eh)
@@ -2019,6 +2119,13 @@ func (a *App) requestCloseTab(idx int) {
 func (a *App) closeTab(idx int) {
 	if idx < 0 || idx >= len(a.tabs) {
 		return
+	}
+	// A composer belonging to the tab going away has nowhere left to
+	// draw, so drop it instead of leaving state pointing at a freed tab.
+	// The note is unsaved either way — closing the diff you were writing
+	// about is as clear a cancel as Esc.
+	if a.composerTab == a.tabs[idx] {
+		a.closeReviewComposer()
 	}
 	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)
 	if a.activeTab >= len(a.tabs) {
@@ -2493,6 +2600,14 @@ func (a *App) draw() {
 
 	if tab := a.activeTabPtr(); tab != nil {
 		ex, ey, ew, eh := a.editorRect()
+		// Review overlays are derived state — which notes exist, and
+		// whether the diff still contains the lines they were written
+		// against — so they are rebuilt from the batch on every frame
+		// rather than maintained alongside it. The rebuild also records
+		// the marker click map the next press is tested against.
+		if tab.IsDiff() {
+			tab.SetDiffOverlays(a.buildDiffOverlays(tab, ew))
+		}
 		tab.Render(a.screen, a.theme, ex, ey, ew, eh)
 	} else {
 		a.drawEmptyEditor()
@@ -2523,6 +2638,9 @@ func (a *App) draw() {
 	}
 	if a.finderOpen {
 		a.drawFinder()
+	}
+	if a.pickerOpen {
+		a.drawReviewPicker()
 	}
 }
 
@@ -2792,7 +2910,7 @@ func (a *App) drawStatusBar() {
 	// on a timer you cannot see.
 	var left string
 	if a.leaderArmed() {
-		drawStatusText(a.screen, sx, sy, sw-rightWidth, " Esc — d diff · g changes · p find file · f find · t tree · w close · q quit", style)
+		drawStatusText(a.screen, sx, sy, sw-rightWidth, " Esc — d diff · r note · ⏎ send · y copy · g changes · p find file · f find · t tree · w close · q quit", style)
 		return
 	}
 	if time.Now().Before(a.statusUntil) && a.statusMsg != "" {

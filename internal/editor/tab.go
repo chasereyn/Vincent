@@ -147,6 +147,12 @@ type Tab struct {
 	// that tab would silently swap the comparison the reviewer asked for
 	// for a different one.
 	DiffFrozen bool
+	// DiffOverlays are extra screen rows the app grows into a diff
+	// between its diff rows — the review composer and the markers under
+	// lines that already carry a note. Set fresh before each render; see
+	// diffoverlay.go for why they occupy real rows instead of being
+	// painted over the top.
+	DiffOverlays []DiffOverlay
 
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and

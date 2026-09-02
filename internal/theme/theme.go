@@ -117,6 +117,23 @@ type Theme struct {
 	// NameTag. It didn't have its own field before this pass; those token
 	// types fell back to SynType or SynVariable depending on the lexer.
 	SynProperty tcell.Color
+	// --- Review notes (phase 3) ---
+	// Appended at the END of the struct on purpose: a palette rewrite
+	// landing at the same time as this feature then merges cleanly
+	// instead of colliding in the middle of the type.
+	//
+	// ReviewBoxBG is the surface behind the inline composer and behind a
+	// saved note's marker row — a shade up from LineHL so the box reads as
+	// something sitting IN the diff rather than as another highlighted
+	// line of it. ReviewBorder draws its frame, ReviewText its content,
+	// and ReviewMarker the ▍ bar that leads a saved note. ReviewStale is
+	// what a note whose file has left the changeset fades to; it has to
+	// stay legible, because a stale note is still the reviewer's words.
+	ReviewBoxBG  tcell.Color
+	ReviewBorder tcell.Color
+	ReviewText   tcell.Color
+	ReviewMarker tcell.Color
+	ReviewStale  tcell.Color
 }
 
 // Default returns Vincent's palette. It is the only theme shipped —
@@ -220,5 +237,15 @@ func Default() Theme {
 
 		// Conflict — see the field comment.
 		Conflict: tcell.NewRGBColor(0xef, 0x71, 0x77),
+
+		// Review notes (phase 3), recoloured onto Ayu Darker. ReviewBoxBG
+		// sits a shade above LineHL so the composer reads as a thing IN the
+		// diff rather than another highlighted row, and still clears the
+		// red and green row tints it opens on top of.
+		ReviewBoxBG:  tcell.NewRGBColor(0x1f, 0x21, 0x27),
+		ReviewBorder: tcell.NewRGBColor(0x3e, 0x40, 0x43),
+		ReviewText:   tcell.NewRGBColor(0xdf, 0xde, 0xda),
+		ReviewMarker: tcell.NewRGBColor(0xfe, 0xb4, 0x54),
+		ReviewStale:  tcell.NewRGBColor(0x69, 0x6a, 0x6a),
 	}
 }
