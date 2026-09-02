@@ -80,6 +80,13 @@ type Theme struct {
 	SynOperator tcell.Color
 	SynPunct    tcell.Color
 	SynConstant tcell.Color
+
+	// Conflict is the dirty dot's colour when the tab is not merely dirty
+	// but conflicted — the file changed on disk while the buffer had
+	// unsaved edits. Deliberately not Modified: at a glance an amber dot
+	// and a slightly different amber dot are the same dot, and this state
+	// is the one that can lose an agent's work. Red reads as "stop".
+	Conflict tcell.Color
 }
 
 // Default returns Vincent's palette. It is the only theme shipped —
@@ -167,5 +174,8 @@ func Default() Theme {
 		SynOperator: tcell.NewRGBColor(0x89, 0xdd, 0xff), // light cyan
 		SynPunct:    tcell.NewRGBColor(0xa9, 0xb1, 0xd6), // soft text
 		SynConstant: tcell.NewRGBColor(0xff, 0x9e, 0x64), // orange
+
+		// Conflict — see the field comment.
+		Conflict: tcell.NewRGBColor(0xef, 0x71, 0x77),
 	}
 }

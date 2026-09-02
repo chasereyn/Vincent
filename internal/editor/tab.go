@@ -8,6 +8,7 @@
 package editor
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"os"
@@ -88,6 +89,21 @@ type Tab struct {
 	// once, instead of re-flashing every reconcile tick.
 	DiskGone bool
 
+	// Conflict records that the file changed on disk while this buffer
+	// had unsaved edits — in Vincent's workflow, an agent rewrote the
+	// file you are correcting. It is sticky on purpose: it is cleared
+	// only by an explicit overwrite, an explicit reload, or the buffer
+	// going clean again. Mtime cannot carry this, because the reconcile
+	// loop has to advance Mtime to stop re-warning about the same write,
+	// and advancing it is exactly what used to forget the conflict and
+	// let the next Save overwrite the agent silently.
+	//
+	// While it is set, Save refuses (ErrDiskConflict) and the caller has
+	// to go through SaveOverwrite or Reload. The tab bar paints the dirty
+	// dot in theme.Conflict and the status bar says "changed on disk", so
+	// the state outlives the three-second flash that announced it.
+	Conflict bool
+
 	// cursorMoved is set by every method that changes Cursor; Render
 	// consumes it to decide whether to scroll the viewport so the cursor
 	// is visible. Without this flag, mouse-wheel scrolling is fought by
@@ -118,6 +134,19 @@ type Tab struct {
 	// buffer — which is what lets scrolling, clamping, and the find bar
 	// operate on a diff tab without knowing it is one. See diffview.go.
 	DiffRows []diff.Row
+
+	// Title overrides the tab-bar label. Empty means "use the file's
+	// basename", which is what every tab opened from disk wants. The
+	// buffer-vs-disk diff the conflict modal opens sets it, because two
+	// diffs of the same file would otherwise be indistinguishable.
+	Title string
+
+	// DiffFrozen marks a diff whose rows did NOT come from the file's own
+	// git diff — today only that buffer-vs-disk comparison. The reconcile
+	// loop and openDiff both skip it: re-running the ordinary diff over
+	// that tab would silently swap the comparison the reviewer asked for
+	// for a different one.
+	DiffFrozen bool
 
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and
@@ -209,8 +238,13 @@ func (t *Tab) IsImage() bool {
 
 // DisplayName returns the basename of Path, or "untitled" for unsaved tabs.
 // A diff tab appends "±" so a file and its diff are distinguishable in the
-// tab bar — both carry the same Path, and both can be open at once.
+// tab bar — both carry the same Path, and both can be open at once. An
+// explicit Title wins over both, for the diffs that are not simply "this
+// file against git".
 func (t *Tab) DisplayName() string {
+	if t.Title != "" {
+		return t.Title
+	}
 	if t.Path == "" {
 		return "untitled"
 	}
@@ -221,17 +255,47 @@ func (t *Tab) DisplayName() string {
 	return name
 }
 
-// Save writes the buffer to disk and clears Dirty. It is an error to call
-// Save on an untitled tab — callers should prompt for a path first. Mtime
-// is refreshed so the disk-reconcile loop doesn't immediately think the
-// file we just wrote was changed by someone else.
+// ErrDiskConflict is what Save returns instead of writing when the file
+// changed on disk while the buffer had unsaved edits. It is a sentinel so
+// the app layer can tell "this needs a decision from the user" apart from
+// a real IO failure and put the Overwrite / Reload / Show diff prompt up.
+var ErrDiskConflict = errors.New("changed on disk since it was opened")
+
+// Save writes the buffer to disk and clears Dirty, unless the tab is
+// conflicted — see Conflict. A conflicted tab returns ErrDiskConflict and
+// writes nothing; SaveOverwrite is the explicit way past it.
+//
+// The guard is belt and braces, the same way ReadOnly is: saveTabAt in the
+// app layer already routes a conflicted tab to the prompt, but the check
+// belongs here too, where the write actually happens, because that is the
+// one place every caller has to come through.
+func (t *Tab) Save() error {
+	if t.Conflict {
+		return ErrDiskConflict
+	}
+	return t.write()
+}
+
+// SaveOverwrite writes the buffer even when the tab is conflicted, and
+// clears the conflict. It exists so "Overwrite" in the conflict prompt has
+// a path that Save's guard cannot silently swallow — a caller reaching for
+// this is stating that losing the on-disk version is the intent.
+func (t *Tab) SaveOverwrite() error {
+	return t.write()
+}
+
+// write is the actual save: it puts the buffer on disk, clears Dirty,
+// DiskGone and Conflict, and refreshes Mtime so the disk-reconcile loop
+// doesn't immediately think the file we just wrote was changed by someone
+// else. It is an error to call it on an untitled tab — callers should
+// prompt for a path first.
 //
 // Every non-text mode refuses outright. This is the last line of defence
 // rather than a convenience: a diff tab carries the real file's Path, so a
-// Save that got this far would write "+added" and "-removed" lines straight
+// write that got this far would put "+added" and "-removed" lines straight
 // over the user's source. The menu already hides the row (hasSavableTab),
-// but the check belongs here too, where the write actually happens.
-func (t *Tab) Save() error {
+// but the check belongs here too.
+func (t *Tab) write() error {
 	if t.ReadOnly() {
 		return fmt.Errorf("%s tabs are read-only", t.Mode)
 	}
@@ -243,6 +307,7 @@ func (t *Tab) Save() error {
 	}
 	t.Dirty = false
 	t.DiskGone = false
+	t.Conflict = false
 	if info, err := os.Stat(t.Path); err == nil {
 		t.Mtime = info.ModTime()
 	}
@@ -259,6 +324,10 @@ func (t *Tab) Save() error {
 // clamped on the next render. Dirty is cleared and the syntax cache is
 // invalidated. Image tabs decode the file again instead of replacing
 // the text buffer.
+//
+// Reload is one of the two ways out of a conflict — the disk version wins
+// and the user's edits go — so it clears Conflict. Callers must have asked
+// for it explicitly; nothing here decides that on the user's behalf.
 func (t *Tab) Reload() error {
 	if t.Path == "" {
 		return fmt.Errorf("no path set for tab")
@@ -276,6 +345,7 @@ func (t *Tab) Reload() error {
 		t.ImageFmt = format
 		t.Mtime = info.ModTime()
 		t.DiskGone = false
+		t.Conflict = false
 		return nil
 	}
 	data, err := os.ReadFile(t.Path)
@@ -291,6 +361,7 @@ func (t *Tab) Reload() error {
 	t.Anchor = t.Cursor // drop any selection — line indices may have shifted.
 	t.Dirty = false
 	t.DiskGone = false
+	t.Conflict = false
 	t.Mtime = info.ModTime()
 	t.StyleStale = true
 	t.cursorMoved = true

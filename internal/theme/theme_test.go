@@ -58,6 +58,7 @@ func TestDefault_AllColorsSet(t *testing.T) {
 		{"SynOperator", th.SynOperator},
 		{"SynPunct", th.SynPunct},
 		{"SynConstant", th.SynConstant},
+		{"Conflict", th.Conflict},
 	}
 
 	for _, c := range cases {
@@ -94,6 +95,9 @@ func TestDefault_ContrastInvariants(t *testing.T) {
 		{"StatusFG vs StatusBG", th.StatusFG, th.StatusBG},
 		// Selection block must stand out against the unselected background.
 		{"Selection vs BG", th.Selection, th.BG},
+		// The conflicted dirty dot has to read as a different state from
+		// the merely-dirty one. Same colour means the warning is invisible.
+		{"Conflict vs Modified", th.Conflict, th.Modified},
 	}
 
 	for _, c := range cases {

@@ -376,17 +376,18 @@ type App struct {
 	confirmMessageLines []string
 	confirmInfoScroll   int
 
-	// Save/Discard/Cancel modal — used when closing a dirty tab or
-	// quitting with unsaved changes. dirtyHover indexes the button row:
-	// 0 = Cancel (safe default for an accidental Enter), 1 = Discard,
-	// 2 = Save. Save and Discard run the corresponding callbacks; Cancel
-	// just dismisses.
-	dirtyOpen            bool
-	dirtyTitle           string
-	dirtyMessage         string
-	dirtyHover           int
-	dirtySaveCallback    func(*App)
-	dirtyDiscardCallback func(*App)
+	// The decision modal — a title, a one-line message, and a row of
+	// buttons. Used when closing a dirty tab or quitting with unsaved
+	// changes (Cancel / Discard / Save) and when a save runs into a file
+	// that changed on disk (Cancel / Show diff / Reload / Overwrite).
+	// dirtyHover indexes dirtyButtons; index 0 is always the safe option,
+	// because that is where focus starts and an accidental Enter has to be
+	// harmless. See modals.go for the button machinery.
+	dirtyOpen    bool
+	dirtyTitle   string
+	dirtyMessage string
+	dirtyHover   int
+	dirtyButtons []dirtyButton
 
 	// Right-click context menu over the file tree.
 	contextOpen  bool
@@ -768,12 +769,28 @@ func (a *App) refreshTreeNow() {
 // mtime to what the tab last knew, and reacts:
 //
 //   - File missing  → flash once, mark the tab dirty so the user knows.
-//   - Disk newer, tab clean → reload the buffer silently, flash success.
-//   - Disk newer, tab dirty → leave the buffer alone, flash a warning
-//     that saving will overwrite.
+//   - Disk newer, tab clean → reload the buffer, silently.
+//   - Disk newer, tab dirty, same bytes → just take the new mtime.
+//   - Disk newer, tab dirty, different bytes → record a conflict, flash
+//     once, and leave the buffer alone. Save then refuses until the user
+//     picks Overwrite or Reload.
 //
 // Untitled tabs (Path == "") are skipped because there's no disk file to
 // reconcile against.
+//
+// Two things here are load-bearing and easy to undo by accident:
+//
+// A conflicted tab keeps its OLD Mtime. The flag, not the timestamp, is
+// what suppresses the re-flash — which is the whole bug this replaced:
+// advancing Mtime to stop the warning repeating also erased the only
+// record that a conflict existed, and the next Save overwrote the agent
+// with no prompt. Leaving Mtime behind has a second payoff: if the user
+// undoes their way back to a clean buffer the conflict clears, and the
+// next tick sees the disk as still newer and reloads it.
+//
+// The byte comparison is not an optimisation. Agents and formatters bump
+// mtime without changing content constantly, and a warning that fires on
+// those is one the user stops reading.
 func (a *App) reconcileOpenTabsWithDisk() {
 	for _, tab := range a.tabs {
 		if tab.Path == "" {
@@ -811,17 +828,31 @@ func (a *App) reconcileOpenTabsWithDisk() {
 			continue // unchanged on disk.
 		}
 		if tab.Dirty {
-			a.flash(fmt.Sprintf("%s changed on disk — your edits will overwrite on save",
+			if tab.Conflict {
+				// Already recorded and already announced. Skipping here
+				// is also what keeps the file read below off the tick for
+				// as long as the conflict stands.
+				continue
+			}
+			data, readErr := os.ReadFile(tab.Path)
+			if readErr == nil && tab.DiskUnchangedSince(data) {
+				// Same bytes as when we loaded it: something rewrote the
+				// file without changing it. Not a conflict.
+				tab.Mtime = info.ModTime()
+				continue
+			}
+			tab.Conflict = true
+			a.flash(fmt.Sprintf("%s changed on disk — save will ask before overwriting",
 				filepath.Base(tab.Path)))
-			// Update Mtime so we don't re-flash every tick for the same change.
-			tab.Mtime = info.ModTime()
 			continue
 		}
 		if err := tab.Reload(); err != nil {
 			a.flash(fmt.Sprintf("%s reload failed: %v", filepath.Base(tab.Path), err))
-			continue
 		}
-		a.flash(fmt.Sprintf("%s reloaded from disk", filepath.Base(tab.Path)))
+		// No flash on success. A clean tab reloading when the agent writes
+		// is the normal case in this workflow, and a flash per write is
+		// constant noise during exactly the stretch you are reading. Same
+		// call diff tabs already made — see reconcileDiffTab.
 	}
 }
 
@@ -1787,6 +1818,13 @@ func (a *App) saveTabAt(idx int) bool {
 		a.flash("Saving untitled tabs is not supported yet")
 		return false
 	}
+	if tab.Conflict {
+		// The file moved under us. Do not write — ask. Returning false
+		// aborts whatever this save was a step of (a close, a quit), which
+		// is right: the user has a decision to make first.
+		a.openConflictPrompt(idx)
+		return false
+	}
 	if err := tab.Save(); err != nil {
 		a.flash(fmt.Sprintf("Save failed: %v", err))
 		return false
@@ -2125,13 +2163,15 @@ func (a *App) menuSaveAndClose() {
 	if tab == nil || tab.Path == "" {
 		return
 	}
-	if err := tab.Save(); err != nil {
-		a.flash(fmt.Sprintf("Save failed: %v", err))
+	// Through saveTabAt rather than tab.Save so a conflicted tab gets the
+	// Overwrite / Reload prompt here too. Save-and-close was the one path
+	// that bypassed it.
+	idx := a.activeTab
+	if !a.saveTabAt(idx) {
 		return
 	}
-	a.refreshGitStatus()
 	a.flash(fmt.Sprintf("Saved %s — closed", filepath.Base(tab.Path)))
-	a.closeTab(a.activeTab)
+	a.closeTab(idx)
 }
 
 // menuClose closes the active tab via the same dirty-tab confirmation flow
@@ -2388,8 +2428,14 @@ func (a *App) drawTabBar() {
 		}
 		tab := a.tabs[r.Index]
 		col := r.X + 1
-		if tab.Dirty {
-			a.screen.SetContent(col, ty, '●', nil, st.Foreground(a.theme.Modified))
+		if tab.Dirty || tab.Conflict {
+			// One dot, two states. Conflict outranks dirty: both mean
+			// "unsaved", but only one of them can lose an agent's work.
+			dot := a.theme.Modified
+			if tab.Conflict {
+				dot = a.theme.Conflict
+			}
+			a.screen.SetContent(col, ty, '●', nil, st.Foreground(dot))
 		}
 		col += 2 // skip dirty slot.
 		// Per-language Nerd Font glyph between the dirty dot and the
@@ -2559,7 +2605,13 @@ func (a *App) drawStatusBar() {
 		} else {
 			lang := detectLangLabel(tab.Path)
 			dirty := ""
-			if tab.Dirty {
+			switch {
+			case tab.Conflict:
+				// Spelled out rather than left to the dot's colour: the
+				// flash that announced this expires after three seconds
+				// and the state does not.
+				dirty = " · ● changed on disk"
+			case tab.Dirty:
 				dirty = " · ●"
 			}
 			left = fmt.Sprintf(" %s · Ln %d, Col %d · %d lines%s",

@@ -14,12 +14,14 @@
 package editor
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -1116,5 +1118,125 @@ func TestTab_Render_GitMarkerDoesNotOverlapLineNumber(t *testing.T) {
 		if got := cellRune(1 + i); got != r {
 			t.Errorf("col %d: got %q, want %q", 1+i, got, string(r))
 		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Disk conflicts
+// -----------------------------------------------------------------------------
+
+// TestSave_RefusesWhenConflicted is the belt-and-braces half of the
+// conflict model: even if some caller skips the app-layer prompt, the write
+// itself must not happen. The file on disk has to come back byte-identical.
+func TestSave_RefusesWhenConflicted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("from the agent\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab, err := NewTab(path)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	tab.InsertString("my edit\n")
+	tab.Conflict = true
+
+	if err := tab.Save(); !errors.Is(err, ErrDiskConflict) {
+		t.Fatalf("Save on a conflicted tab: got %v, want ErrDiskConflict", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != "from the agent\n" {
+		t.Fatalf("Save must not have written; disk holds %q", got)
+	}
+	if !tab.Dirty || !tab.Conflict {
+		t.Fatal("a refused Save must leave Dirty and Conflict alone")
+	}
+}
+
+// TestSaveOverwrite_WritesAndClearsConflict is the Overwrite button's
+// contract: the buffer wins, and the tab stops being conflicted so the next
+// ordinary Save just works.
+func TestSaveOverwrite_WritesAndClearsConflict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("from the agent\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab, err := NewTab(path)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	tab.Buffer = NewBuffer("mine\n")
+	tab.Dirty = true
+	tab.Conflict = true
+
+	if err := tab.SaveOverwrite(); err != nil {
+		t.Fatalf("SaveOverwrite: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "mine\n" {
+		t.Fatalf("disk should hold the buffer; got %q", got)
+	}
+	if tab.Conflict {
+		t.Fatal("Overwrite should clear Conflict")
+	}
+	if tab.Dirty {
+		t.Fatal("Overwrite should clear Dirty")
+	}
+}
+
+// TestReload_ClearsDirtyAndConflict is the Reload button's contract: disk
+// wins, the buffer becomes what is on disk, and both flags drop.
+func TestReload_ClearsDirtyAndConflict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("first\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab, err := NewTab(path)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	tab.InsertString("my edit\n")
+	tab.Conflict = true
+	if err := os.WriteFile(path, []byte("from the agent\n"), 0o644); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	if err := tab.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if got := tab.Buffer.String(); got != "from the agent\n" {
+		t.Fatalf("buffer after reload: %q", got)
+	}
+	if tab.Dirty || tab.Conflict {
+		t.Fatalf("Reload should clear both flags (dirty=%v conflict=%v)",
+			tab.Dirty, tab.Conflict)
+	}
+	if !tab.Mtime.After(time.Time{}) {
+		t.Fatal("Reload should stamp the new mtime")
+	}
+}
+
+// TestSaveOverwrite_StillRefusesReadOnlyTabs keeps the read-only gate
+// ahead of the conflict gate. A diff tab carries the real file's Path, so
+// an Overwrite that got through would write diff text over the source.
+func TestSaveOverwrite_StillRefusesReadOnlyTabs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("real source\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab := NewDiffTab(path, nil)
+
+	if err := tab.SaveOverwrite(); err == nil {
+		t.Fatal("SaveOverwrite on a diff tab should fail")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "real source\n" {
+		t.Fatalf("diff tab wrote over the source: %q", got)
 	}
 }

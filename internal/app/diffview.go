@@ -127,10 +127,14 @@ func (a *App) openDiff(path string) {
 	}
 
 	for i, t := range a.tabs {
-		if t.IsDiff() && t.Path == path {
+		if t.IsDiff() && !t.DiffFrozen && t.Path == path {
 			// Re-diff on re-open rather than showing what the file looked
 			// like the last time this tab was focused. In an agent
 			// workflow the file has usually moved on since.
+			//
+			// A frozen diff (the conflict prompt's buffer-vs-disk view) is
+			// skipped: it answers a different question about the same file
+			// and must not be recycled into the git diff.
 			t.SetDiffRows(rows)
 			a.activeTab = i
 			return
@@ -177,6 +181,12 @@ func (a *App) openDiffAtLine(path string, line int) {
 // rather than emptying out: an agent reverting its own change should not
 // silently erase the thing you were reading.
 func (a *App) reconcileDiffTab(t *editor.Tab) {
+	if t.DiffFrozen {
+		// Not this file's git diff — today, a buffer-vs-disk comparison
+		// the conflict prompt opened. Re-running the ordinary diff over it
+		// would replace what the reviewer asked to see.
+		return
+	}
 	// A missing file is not a reason to bail — a deletion is a diff too —
 	// but a zero mtime from the failed stat must not read as "unchanged".
 	mtime := time.Time{}
