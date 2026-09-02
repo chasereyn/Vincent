@@ -78,6 +78,15 @@ type Tree struct {
 	// only the existing chevron (the legacy look) — important for
 	// terminals or fonts that can't render the private-use glyphs.
 	IconsEnabled bool
+
+	// HoverY is the local Y (within the rectangle Render was last called
+	// with — the same coordinate space HitTest takes) of the row under
+	// the mouse pointer, or -1 when nothing is hovered. Mirrors the
+	// Changes panel's gitPanelHover: the app calls SetHover on every
+	// mouse event over the tree and ClearHover on every event outside
+	// it, because terminals emit no distinct "pointer left" event to key
+	// a clear off of instead.
+	HoverY int
 }
 
 // New creates a tree rooted at root and pre-loads its top-level children so
@@ -99,7 +108,22 @@ func New(root string) (*Tree, error) {
 	if err := loadChildren(n); err != nil {
 		return nil, err
 	}
-	return &Tree{Root: n}, nil
+	return &Tree{Root: n, HoverY: -1}, nil
+}
+
+// SetHover records the local Y of the row under the pointer so the next
+// Render paints it in the hover colour. Called by the app on every mouse
+// event that lands inside the tree's rectangle.
+func (t *Tree) SetHover(localY int) {
+	t.HoverY = localY
+}
+
+// ClearHover removes any hover highlight. Called by the app for any mouse
+// event landing outside the tree's rectangle — see HoverY's doc comment
+// for why that has to be an explicit clear rather than derived from
+// motion alone.
+func (t *Tree) ClearHover() {
+	t.HoverY = -1
 }
 
 // loadChildren is the lazy-load entry point used the first time a directory
@@ -265,7 +289,31 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		item := flat[idx]
 		active := item.Node.Path == t.ActiveFile || (item.Node.IsDir && item.Node.Path == t.ActiveFolder)
 		change := t.changeKind(item.Node)
-		drawNodeRow(scr, th, x, listTop+row, w, item, active, change, t.IconsEnabled)
+
+		// Full-width row background: the active/selected row wins over a
+		// hover, and either wins over the plain sidebar ground. Painted
+		// before drawNodeRow so the row's text and glyph sit on top of it.
+		// localY mirrors HitTest's convention (row+2, since row 0 is the
+		// EXPLORER header and row 1 is the project root) so HoverY — set
+		// by the app from the same local coordinates HitTest takes — lines
+		// up with the row it was recorded against.
+		rowY := listTop + row
+		localY := row + 2
+		rowBG := bg
+		switch {
+		case active:
+			rowBG = th.RowSelected
+		case localY == t.HoverY:
+			rowBG = th.RowHover
+		}
+		if rowBG != bg {
+			rowStyle := tcell.StyleDefault.Background(rowBG)
+			for cx := x; cx < x+w; cx++ {
+				scr.SetContent(cx, rowY, ' ', nil, rowStyle)
+			}
+		}
+
+		drawNodeRow(scr, th, x, rowY, w, item, active, change, t.IconsEnabled, rowBG)
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
@@ -282,24 +330,25 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 	return t.DirtyFiles[n.Path]
 }
 
-// drawNodeRow renders one tree row with proper indent, chevron, and color.
-// active=true marks the active file or current working folder. change marks
-// uncommitted git status and overrides the normal foreground so changed names
-// stand out in the tree like other modern editors.
+// drawNodeRow renders one tree row with proper indent guides, chevron, and
+// color. active=true marks the active file or current working folder (and
+// also selects the row's full-width background — see Render). change marks
+// uncommitted git status and overrides the normal foreground so changed
+// names stand out in the tree like other modern editors. bg is the row's
+// already-decided background (plain sidebar ground, or the hover/selected
+// fill Render painted before calling this) — every style drawn here has to
+// use it rather than assume SidebarBG, or a hovered/selected row would show
+// through as sidebar-coloured text on a highlighted background.
 // withIcons=true prefixes the name with a Nerd Font glyph + space; off
 // renders the legacy chevron-only look for terminals that can't show
 // the private-use glyphs.
 //
-// When icons are enabled the row is rendered in three segments
-// (prefix → glyph → name) so the glyph can take its own per-language
-// colour while the name keeps the row's normal fg/dirty/active
-// styling. That's the visual cue you find in nvim-tree and friends:
-// a quick eye-scan picks out Go from Ruby from Markdown without
-// reading any text.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool) {
-	bg := th.SidebarBG
-	indent := strings.Repeat("  ", item.Depth)
-
+// When icons are enabled the row is rendered in four segments (indent →
+// chevron → glyph → name) so the glyph can take its own per-language
+// colour while the name keeps the row's normal fg/dirty/active styling.
+// That's the visual cue you find in nvim-tree and friends: a quick
+// eye-scan picks out Go from Ruby from Markdown without reading any text.
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool, bg tcell.Color) {
 	// Compute the row-level foreground via this priority cascade
 	// (highest wins last):
 	//
@@ -331,25 +380,42 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	if active {
 		rowStyle = rowStyle.Bold(true)
 	}
+	// Indent guides render in their own dim colour rather than the row's
+	// fg, so the eye reads them as structure instead of as part of the
+	// filename. A file at depth 0 draws zero guide units, unchanged from
+	// before this existed.
+	guideStyle := tcell.StyleDefault.Background(bg).Foreground(th.Subtle)
 
-	// Build the left chunk (indent + chevron + space) and right chunk
-	// (name, with a trailing slash for dirs). Both render in rowStyle;
-	// only the glyph between them gets its own colour.
-	var prefix, suffix string
-	if item.Node.IsDir {
-		chev := "▸"
-		if item.Node.Expanded {
-			chev = "▾"
+	col := x
+	remaining := func() int { return w - (col - x) }
+
+	drawString(scr, col, y, remaining(), " ", rowStyle)
+	col++
+	for i := 0; i < item.Depth; i++ {
+		if remaining() <= 0 {
+			break
 		}
-		prefix = " " + indent + chev + " "
-		suffix = item.Node.Name + "/"
-	} else {
-		prefix = " " + indent + "  "
-		suffix = item.Node.Name
+		drawString(scr, col, y, remaining(), "│ ", guideStyle)
+		col += 2
 	}
 
+	var chevOrBlank, suffix string
+	if item.Node.IsDir {
+		chev := "›"
+		if item.Node.Expanded {
+			chev = "⌄"
+		}
+		chevOrBlank = chev + " "
+		suffix = item.Node.Name + "/"
+	} else {
+		chevOrBlank = "  "
+		suffix = item.Node.Name
+	}
+	drawString(scr, col, y, remaining(), chevOrBlank, rowStyle)
+	col += runeLen(chevOrBlank)
+
 	if !withIcons {
-		drawString(scr, x, y, w, prefix+suffix, rowStyle)
+		drawString(scr, col, y, remaining(), suffix, rowStyle)
 		return
 	}
 
@@ -363,11 +429,19 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 		glyphStyle = glyphStyle.Bold(true)
 	}
 
-	drawString(scr, x, y, w, prefix, rowStyle)
-	px := len([]rune(prefix))
-	drawString(scr, x+px, y, w-px, glyph, glyphStyle)
-	gx := len([]rune(glyph))
-	drawString(scr, x+px+gx, y, w-px-gx, "  "+suffix, rowStyle)
+	drawString(scr, col, y, remaining(), glyph, glyphStyle)
+	col += runeLen(glyph)
+	drawString(scr, col, y, remaining(), "  "+suffix, rowStyle)
+}
+
+// runeLen returns the visible cell count of s (one cell per rune) — used to
+// advance the drawing cursor past a just-drawn segment.
+func runeLen(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
 }
 
 // gitChangeColor maps git status kinds to the tree row foreground.

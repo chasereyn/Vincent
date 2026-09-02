@@ -1057,6 +1057,32 @@ func TestSidebarClick_RootRowResetsActiveFolder(t *testing.T) {
 	}
 }
 
+// TestUpdateTreeHover_ClearsOutsideTheSidebar mirrors
+// TestGitPanel_HoverClearsOutsideThePanel: there is no "pointer left the
+// window" event, so the tree's row highlight has to be cleared by the next
+// event that lands elsewhere, not left lit after the mouse moves to the
+// editor pane.
+func TestUpdateTreeHover_ClearsOutsideTheSidebar(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "click.txt")
+	if err := os.WriteFile(target, []byte("z"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.draw() // populate tree.visible so hover has a real row to land on
+
+	sx, sy, sw, _ := a.sidebarRect()
+	a.updateTreeHover(sx+1, sy+1) // row 1 = project root, inside the tree
+	if a.tree.HoverY != 1 {
+		t.Fatalf("HoverY = %d over a real row, want 1", a.tree.HoverY)
+	}
+
+	a.updateTreeHover(sx+sw+5, sy+1) // past the splitter — over the editor now
+	if a.tree.HoverY != -1 {
+		t.Errorf("HoverY = %d after moving off the sidebar, want -1", a.tree.HoverY)
+	}
+}
+
 // TestSelectWordAt selects the word under a buffer position.
 func TestSelectWordAt(t *testing.T) {
 	dir := t.TempDir()

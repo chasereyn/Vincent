@@ -1121,6 +1121,13 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 		return
 	}
 
+	// File-tree row hover. Same reasoning as the Changes panel just below:
+	// updated on every mouse event, not just motion, since terminals emit
+	// no "pointer left the window" event to clear a stale highlight with.
+	if a.sidebarShown {
+		a.updateTreeHover(x, y)
+	}
+
 	// Changes-panel hover. Updated on every mouse event rather than only on
 	// motion, because terminals emit no "pointer left the window" event —
 	// tying it to motion alone leaves a row lit after the pointer moves to
@@ -1292,6 +1299,23 @@ func (a *App) scrollAtH(x, y, delta int) {
 			t.ScrollH(delta)
 		}
 	}
+}
+
+// updateTreeHover keeps the file tree's row highlight in sync with the
+// mouse, mirroring updateGitPanelHover: recorded on every mouse event that
+// lands inside the tree's rectangle, cleared for one that doesn't. sw<=0
+// (sidebar hidden or too narrow) and any (x, y) outside sidebarRect both
+// route through the same ClearHover call.
+func (a *App) updateTreeHover(x, y int) {
+	if a.tree == nil {
+		return
+	}
+	sx, sy, sw, sh := a.sidebarRect()
+	if sw <= 0 || x < sx || x >= sx+sw || y < sy || y >= sy+sh {
+		a.tree.ClearHover()
+		return
+	}
+	a.tree.SetHover(y - sy)
 }
 
 // tryTreeContextClick opens the right-click context menu when (x, y) lands
