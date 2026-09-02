@@ -11,3 +11,6 @@
 # Test coverage artifacts.
 /coverage.out
 /coverage.html
+
+# Agent worktrees created by Claude Code live here while a phase is in flight.
+.claude/worktrees/
