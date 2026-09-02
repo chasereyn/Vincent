@@ -6,20 +6,25 @@ disagrees with the codebase it was forked from.
 
 ## What Vincent is
 
-**A read-only, mouse-first terminal client for reviewing code that AI
-agents wrote.** File tree on the left, the file or its diff in the middle,
-a Zed-shaped git panel on the right. You click lines in a diff, write a
-review note, and one keypress delivers those notes back to the agent that
-wrote the code.
+**A mouse-first terminal client for reviewing code that AI agents wrote,
+and correcting it in place.** File tree on the left, the file or its diff
+in the middle, a Zed-shaped git panel on the right. You click lines in a
+diff, write a review note, and one keypress delivers those notes back to
+the agent that wrote the code. When a fix is smaller than a note, you type
+it yourself and save.
 
-Vincent is **not an editor**. It has no insert mode, no save, no undo, no
-LSP, no autocomplete. If a change you are asked to make would let a user
-type a character into a file, stop and confirm — that is a scope change,
-not a feature.
+Vincent is a **small editor, not an IDE**. Type, select, undo, find and
+replace, save. No LSP, no autocomplete, no multi-cursor, no formatters.
+Revision 1 of the plan said "not an editor" and scheduled the editing
+engine for deletion; that deletion never happened, and on 2026-09-02 the
+decision was reversed. The engine in `internal/editor` is byte-identical to
+spice-edit's apart from the diff-mode additions. Diff and image tabs stay
+read-only through `Tab.ReadOnly()`.
 
-The person using Vincent does not write code. Agents write it; he reviews
-it. Every design decision should optimise for reading a diff quickly and
-getting feedback back to an agent — not for authoring.
+The person using Vincent mostly does not write code. Agents write it; he
+reviews it and makes small corrections. Every design decision should
+optimise for reading a diff quickly and getting feedback back to an agent.
+Authoring is secondary and must never make reading worse.
 
 ## Provenance
 
@@ -73,24 +78,31 @@ Already stripped:
 | `app/fileops.go` | create / rename / delete. The copy-path half survives as `app/pathops.go` |
 | brew formula, goreleaser, install.sh, website, samples | upstream distribution machinery |
 
-**Still present and still to remove:** `internal/editor/undo.go`,
-`comment.go`, `indent.go`, and the mutation half of `tab.go`
-(`InsertRune`, `Backspace`, `Delete`, dirty-state, save). These were left
-in place on purpose. `tab.go` is woven into the undo stack — deleting
-`undo.go` alone produces eleven compile errors in `tab.go` — so making the
-buffer read-only is a **design task**, not a deletion. Decide what `Tab`
-becomes first (an immutable view over `[]string`?), then the three files
-fall out on their own.
+**The editing engine stays.** `internal/editor/undo.go`, `comment.go`,
+`indent.go`, and the mutation half of `tab.go` (`InsertRune`, `Backspace`,
+`Delete`, dirty state, save) are live and wired: `handleKey` falls through
+to `applyEditKey` (`app.go:1060`), `Esc s` saves, `Esc u`/`Esc r` undo and
+redo, and Save / Undo / Cut / Paste are menu rows. `Tab.Mode` plus
+`Tab.ReadOnly()` (= `Mode != ""`) is the whole design: a text tab is
+mutable, a diff or image tab is not. **Guard new mutations on
+`ReadOnly()`, never on `IsImage()`** — that was the actual bug phase 1
+found: `Tab.Save()` checked only for images, and a diff tab carries the
+real file's `Path`, so saving one would have written diff text over the
+user's source.
 
-Phase 1 answered half of that question without forcing the refactor:
-`Tab.Mode` already existed for image previews, so a diff is just another
-mode, and `Tab.ReadOnly()` (= `Mode != ""`) is now the single gate every
-mutation path checks. **Guard new mutations on `ReadOnly()`, never on
-`IsImage()`** — that was the actual bug phase 1 found: `Tab.Save()` checked
-only for images, and a diff tab carries the real file's `Path`, so saving
-one would have written diff text over the user's source. When the plain
-text path finally goes read-only, `ReadOnly()` becomes `true` and the three
-files above fall out.
+What the editor is missing, from `docs/research/2026-09-02/02-editor.md`:
+
+- **Bracketed paste.** `EnablePaste()` is never called. A pasted escape
+  byte arms the leader and the next `q` quits Vincent mid-paste. Fix this
+  before any other editor work.
+- **A conflict model.** `reconcileOpenTabsWithDisk` (`app.go:790-796`)
+  flashes once when the agent rewrites a dirty file, then advances
+  `tab.Mtime` and forgets. The next save silently overwrites the agent's
+  work. Wanted: a sticky `Tab.Conflict`, a byte comparison against the
+  open snapshot so mtime-only bumps are not conflicts, a red dot, and a
+  save that refuses with Overwrite / Reload / Cancel / Show diff.
+- Find and replace, new file, save-as, `SelectAll` wiring, triple-click
+  line select, indentation carried on Enter.
 
 ## Architecture map
 
@@ -123,8 +135,13 @@ internal/clipboard           50  OSC 52 — works over SSH and through tmux
 These are hard requirements from the person this is built for. Do not
 trade them away for convenience.
 
-1. **Pure black background.** Set explicitly, never `tcell.ColorDefault` —
-   that inherits the host terminal and will not reliably be black.
+1. **`#030405` background, set explicitly**, never `tcell.ColorDefault` —
+   that inherits the host terminal and will not reliably match. This is
+   Chase's Ghostty background and the ground his Zed is re-based onto. The
+   whole palette is his Zed: the Ayu Darker extension plus his
+   `settings.json` overrides (text `#dfdeda`, tree text `#c3c2be`). The
+   mapping table is in the roadmap artifact under "Palette". Translucent
+   Zed values are pre-blended over `#030405` because a cell has no alpha.
 2. **Mouse-first.** Herdr is the quality bar. Click, drag, and scroll work
    everywhere; keyboard is the supplement. This is the opposite of the
    usual TUI convention, so design it in rather than bolting it on.
@@ -133,10 +150,19 @@ trade them away for convenience.
    why the diff renderer must be in-process rather than shelling out to
    `delta`. `git` and `herdr` are the only exceptions — both are shelled
    out to deliberately.
-4. **Read-only.** One exception, `git checkout`, because branch switching
-   was asked for by name. Everything else that mutates belongs to lazygit.
-   The Changes panel is where this pressure will show up first — resist
-   adding staging checkboxes to it.
+4. **Four writes, all blunt.** Save a text buffer. `git checkout`.
+   Commit-all (`git add -A && git commit -m`, tracked and untracked
+   together). `git push`. Each was asked for by name. What is **not**
+   coming: staging checkboxes, partial commits, amend, rebase, stash,
+   discard. Anything finer than "commit everything" belongs to lazygit,
+   one Herdr pane over. The Changes panel is where the pressure to add a
+   checkbox will show up first.
+5. **Esc leader only.** No `Ctrl+` chords (see conventions below), and no
+   Esc-Esc double-tap either — Chase never presses Esc by accident, so a
+   single Esc arms the leader, one letter fires, Esc again cancels. The
+   menu is a click on `≡` or `Esc m`. The proposed table is in the roadmap
+   artifact under "Keys"; it moves find to `Esc /` and redo to `Esc U` to
+   free `f` (file panel) and `r` (review).
 
 ## Build
 
@@ -147,14 +173,15 @@ make test         # go test ./...
 make build-mac    # darwin/arm64 cross-compile
 ```
 
-`make`, `go`, and `git` come from scoop on this machine. There is no dev
-server — it is a TUI. To check UI behaviour, build and run it against a
-real directory.
+On the Mac, `go` is Homebrew's (`/opt/homebrew/bin/go`, 1.27 as of
+2026-09-02) and `make` and `git` are Apple's. There is no dev server — it
+is a TUI. To check UI behaviour, build and run it against a real directory.
 
-**Test build changes from PowerShell, not just from Git Bash.** Chase's
-primary shell is PowerShell; an agent's shell tool is usually Git Bash.
-Three separate bugs shipped because of that gap, and none of them
-reproduce in Git Bash:
+The Windows notes below are kept because CI still runs Windows and Chase
+may return to it. **On Windows, test build changes from PowerShell, not
+just from Git Bash.** An agent's shell tool is usually Git Bash. Three
+separate bugs shipped because of that gap, and none of them reproduce in
+Git Bash:
 
 - GNU make finds a POSIX shell on PATH under Git Bash and falls back to
   **cmd.exe** under PowerShell, where `mkdir -p bin` becomes "A
@@ -258,8 +285,8 @@ macOS Terminal is coming.
 
 ## Cross-platform
 
-Developed on Windows now, moving to macOS. CI runs Linux, macOS, **and
-Windows**.
+Developed on Windows through phase 2, on macOS (Apple Silicon) since
+2026-09-02. CI runs Linux, macOS, **and Windows**.
 
 Upstream tested Linux and macOS only, and eighteen of its tests failed on
 Windows — every one a POSIX path literal baked into a test assertion, not a
@@ -276,15 +303,34 @@ Go sources on checkout and `gofmt -l` flags every file.
 Full plan, with the research behind each decision:
 <https://claude.ai/code/artifact/f4e134ac-f25c-4f7f-8e85-0658e4a18a27>
 
+Revised 2026-09-02 (revision 2). The research behind the revision is in
+`docs/research/2026-09-02/` — four reports covering the review loop, the
+editor, chrome and markdown, and the flicker. Read the relevant one before
+starting its phase.
+
 | Phase | What | Status |
 |---|---|---|
 | 0 | Fork, strip, blacken | **done** |
 | 1 | Inline (Zed-style) diff viewer | **done** |
 | 2 | Zed-shaped read-only git panel | **done** |
-| 3 | Review notes + herdr/clipboard handoff | next |
-| 3b | Branch checkout, off the panel footer | |
-| 4 | Multi-repo workspace | |
-| 5 | Content search + markdown renderer | |
+| 3 | Review notes + herdr/clipboard handoff, legend in the batch | next |
+| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | |
+| 4 | Render loop: skip no-op motion frames, drain events, git tick off the UI thread | |
+| 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | |
+| 6 | Editor: bracketed paste, conflict model, find/replace, new file, Myers diff | |
+| 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | |
+| 8 | Multi-repo workspace + content search | |
+| 9 | Ship: README, releases via Actions, lock contributions, explainers | |
+
+Phases 4 and 5 do not depend on 3 and can run in parallel with it.
+
+**Reference repos** live at `~/Developer/vincent-refs/`, one shallow clone
+per folder: spice-edit, herdr, herdr-file-viewer, herdr-reviewr,
+herdr-sidebar, herdr-lazygit, hunk, lazygit, tuicr, ftdv, zed (sparse
+checkout of the editor, git_ui, project_panel, theme, ui, markdown crates),
+and claude-code (the plugins repo — it does not contain the CLI source).
+They are reference only; never edit them. Older notes below that cite
+`~/Downloads/<repo>` mean this directory now.
 
 Split (side-by-side) diffs come after inline — inline first was an explicit
 call. The split view is a second painter over the same `[]diff.Row`;
@@ -382,8 +428,10 @@ Things worth knowing before changing it:
 ### Phase 2 notes
 
 The handoff is three `herdr` CLI calls — `agent list`, `pane send-text`
-(bracketed-paste wrapped), `agent focus`. Two rules that are easy to get
-wrong and expensive to debug:
+(bracketed-paste wrapped by Vincent itself, terminators stripped byte by
+byte), `agent focus`. **Never `herdr agent prompt`** — verified on herdr
+0.8.2, it sends Enter after a short delay, which submits the review
+unattended. Three rules that are easy to get wrong and expensive to debug:
 
 - **Consume on success.** Clear the comment batch only after the send
   returns OK, or a closed pane silently eats a review.
@@ -391,8 +439,14 @@ wrong and expensive to debug:
   anchor. When the agent rewrites the file the snippet is the durable
   evidence; just flag the comment stale if its file leaves the changeset.
 
-Reference implementation: `~/Downloads/herdr-reviewr`. Comment composer UX
-to match: `~/Downloads/tuicr`.
+- **Log herdr's JSON error, show one sentence.** Its `pane_not_found`
+  payload names pane ids the reviewer never saw. herdr-reviewr translates
+  every failure to a plain status line and logs the real envelope.
+
+Reference implementation: `~/Developer/vincent-refs/herdr-reviewr/src/herdr.rs`.
+Comment composer UX to match: `~/Developer/vincent-refs/tuicr`
+(`src/ui/comment_panel.rs`, inline box under the line; kinds cycle on Tab;
+wire format in `src/output/markdown.rs`).
 
 ## Commits
 
