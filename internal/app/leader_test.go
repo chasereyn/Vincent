@@ -61,7 +61,7 @@ func TestHandleKey_LeaderSave(t *testing.T) {
 }
 
 // TestHandleKey_LeaderUndoRedo round-trips an edit through Esc-u and
-// Esc-r. Pins down both bindings at once and the fact that the leader
+// Esc-U. Pins down both bindings at once and the fact that the leader
 // state resets between sequences (we re-arm Esc each time).
 func TestHandleKey_LeaderUndoRedo(t *testing.T) {
 	dir := t.TempDir()
@@ -80,7 +80,7 @@ func TestHandleKey_LeaderUndoRedo(t *testing.T) {
 	}
 
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'r'))
+	a.handleKey(keyEv(tcell.KeyRune, 'U'))
 	if a.activeTabPtr().Buffer.Lines[0] != "a" {
 		t.Fatalf("Esc-r should have redone the insert, got %q", a.activeTabPtr().Buffer.Lines[0])
 	}
@@ -93,15 +93,16 @@ func TestHandleKey_LeaderToggleSidebar(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	before := a.sidebarShown
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 't'))
+	a.handleKey(keyEv(tcell.KeyRune, 'f'))
 	if a.sidebarShown == before {
-		t.Fatalf("Esc-t should toggle sidebar (still %v)", a.sidebarShown)
+		t.Fatalf("Esc-f should toggle sidebar (still %v)", a.sidebarShown)
 	}
 }
 
-// TestHandleKey_LeaderToggleLineComment binds Esc-/ to the same action menu
-// path, giving keyboard users a fast toggle without adding Ctrl shortcuts.
-func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
+// TestHandleKey_LeaderFind binds Esc-/ to the find bar. Slash is the
+// find gesture in less, vim, and most pagers, and it freed f for the file
+// panel toggle.
+func TestHandleKey_LeaderFind(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(target, []byte("one\ntwo"), 0644); err != nil {
@@ -113,8 +114,27 @@ func TestHandleKey_LeaderToggleLineComment(t *testing.T) {
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
 	a.handleKey(keyEv(tcell.KeyRune, '/'))
 
-	if got := a.activeTabPtr().Buffer.String(); got != "// one\ntwo" {
-		t.Fatalf("Esc-/ should comment the cursor line, got %q", got)
+	if !a.findOpen {
+		t.Fatal("Esc-/ should open the find bar")
+	}
+}
+
+// TestHandleKey_LeaderSelectAll binds Esc-a to Tab.SelectAll, which had
+// no caller before the 2026-09-02 key rework.
+func TestHandleKey_LeaderSelectAll(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(target, []byte("one\ntwo"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'a'))
+
+	if !a.hasSelection() {
+		t.Fatal("Esc-a should select the whole buffer")
 	}
 }
 
@@ -175,15 +195,35 @@ func TestHandleKey_LeaderTimesOut(t *testing.T) {
 	}
 }
 
-// TestHandleKey_EscDoubleTapStillOpensMenu makes sure adding the leader
-// table didn't break the existing double-Esc-opens-menu gesture. The
-// second Esc inside the leader window must still be interpreted as
-// "open the menu," not as an unbound leader keystroke.
-func TestHandleKey_EscDoubleTapStillOpensMenu(t *testing.T) {
+// TestHandleKey_EscEscCancelsLeader pins the 2026-09-02 rework: a second
+// Esc while the leader is armed cancels it rather than opening the menu.
+// The menu is Esc m now.
+func TestHandleKey_EscEscCancelsLeader(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	if !a.leaderArmed() {
+		t.Fatal("first Esc should arm the leader")
+	}
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	if a.menuOpen {
+		t.Fatal("Esc-Esc must not open the menu any more")
+	}
+	if a.leaderArmed() {
+		t.Fatal("second Esc should cancel the armed leader")
+	}
+}
+
+// TestHandleKey_LeaderMenu binds Esc-m to the action menu, replacing the
+// old Esc-Esc double-tap.
+func TestHandleKey_LeaderMenu(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	a.handleKey(keyEv(tcell.KeyRune, 'm'))
 	if !a.menuOpen {
-		t.Fatal("double-Esc should still open the menu after leader was added")
+		t.Fatal("Esc-m should open the menu")
+	}
+	a.handleKey(keyEv(tcell.KeyEsc, 0))
+	if a.menuOpen {
+		t.Fatal("Esc with the menu open should close it")
 	}
 }

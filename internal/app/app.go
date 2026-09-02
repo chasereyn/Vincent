@@ -52,8 +52,10 @@ const (
 	minHeight            = 24
 	statusFlashFor       = 3 * time.Second
 	doubleClickMs        = 500 * time.Millisecond
-	// doubleEscMs is how long an Esc stays "armed" — both for the Esc-Esc
-	// double-tap that opens the menu and for the Esc-<letter> leader keys.
+	// doubleEscMs is how long an Esc stays "armed" for the Esc-<letter>
+	// leader keys. The name predates the removal of the Esc-Esc menu
+	// double-tap; it is kept so the tests and status-bar code that cite
+	// it still read.
 	//
 	// Raised from spice-edit's 500ms after Esc-q failed to quit for the
 	// person this is built for. Half a second is a typist's reflex window,
@@ -188,7 +190,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		// History
 		{
 			{label: "Undo", shortcut: "Esc u", action: (*App).menuUndo, enabled: (*App).hasUndo},
-			{label: "Redo", shortcut: "Esc r", action: (*App).menuRedo, enabled: (*App).hasRedo},
+			{label: "Redo", shortcut: "Esc U", action: (*App).menuRedo, enabled: (*App).hasRedo},
 			{label: "Revert file", action: (*App).menuRevert, enabled: (*App).hasRevert},
 		},
 		// Review
@@ -198,7 +200,7 @@ func builtinMenuGroups() [][]menuItemDef {
 		},
 		// Search
 		{
-			{label: "Find in file", shortcut: "Esc f", action: (*App).menuFind, enabled: (*App).hasFindable},
+			{label: "Find in file", shortcut: "Esc /", action: (*App).menuFind, enabled: (*App).hasFindable},
 			{label: "Find file in project", shortcut: "Esc p", action: (*App).menuFindFile, enabled: (*App).hasFinder},
 		},
 		// File actions
@@ -208,14 +210,15 @@ func builtinMenuGroups() [][]menuItemDef {
 		},
 		// Clipboard
 		{
+			{label: "Select all", shortcut: "Esc a", action: (*App).menuSelectAll, enabled: (*App).hasTab},
 			{label: "Copy selection", action: (*App).menuCopy, enabled: (*App).hasSelection},
 			{label: "Cut selection", action: (*App).menuCut, enabled: (*App).hasSelection},
 			{label: "Paste", action: (*App).menuPaste, enabled: (*App).hasClipboard},
-			{label: "Toggle line comment", shortcut: "Esc /", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
+			{label: "Toggle line comment", action: (*App).menuToggleLineComment, enabled: (*App).hasCommentableTab},
 		},
 		// View toggle
 		{
-			{shortcut: "Esc t", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
+			{shortcut: "Esc f", action: (*App).menuToggleSidebar, enabled: alwaysTrue, labelFor: (*App).sidebarToggleLabel, visible: (*App).hasTree},
 		},
 		// Quit
 		{
@@ -952,23 +955,22 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 	if ev.Key() == tcell.KeyEsc {
 		// Esc is the editor's only command key. Behavior:
 		//   • menu open  → close it
-		//   • menu shut  → open it on the SECOND Esc within doubleEscMs;
-		//     a SINGLE Esc arms the leader table (see below).
-		// A lone Esc that isn't followed by a leader binding within the
-		// window is intentionally a no-op so the key still feels harmless
-		// to mash.
+		//   • leader armed → cancel it (a second Esc is a "never mind")
+		//   • otherwise  → arm the leader table (see below)
+		// There is no Esc-Esc menu double-tap: the menu is Esc m or a
+		// click on ≡. A lone Esc that isn't followed by a leader binding
+		// within the window is intentionally a no-op so the key still
+		// feels harmless to mash.
 		if a.menuOpen {
 			a.closeMenu()
 			a.lastEscape = time.Time{}
 			return
 		}
-		now := time.Now()
-		if !a.lastEscape.IsZero() && now.Sub(a.lastEscape) < doubleEscMs {
-			a.openMenu()
+		if a.leaderArmed() {
 			a.lastEscape = time.Time{}
 			return
 		}
-		a.lastEscape = now
+		a.lastEscape = time.Now()
 		return
 	}
 	// Esc-leader hotkey: if Esc was pressed within doubleEscMs and this
@@ -2054,6 +2056,20 @@ func (a *App) menuClose() {
 func (a *App) menuCopy() {
 	a.closeMenu()
 	a.copySelection()
+}
+
+// menuSelectAll selects the whole buffer of the active tab. Tab.SelectAll
+// existed since the fork with no caller; Esc a and the menu row give it
+// one. It works on diff tabs too — selecting a diff to copy it is a
+// legitimate read-only gesture — but not on image tabs, which have no
+// text to select.
+func (a *App) menuSelectAll() {
+	a.closeMenu()
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsImage() {
+		return
+	}
+	tab.SelectAll()
 }
 
 // menuCut cuts the current selection.

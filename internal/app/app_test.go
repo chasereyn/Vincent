@@ -1195,21 +1195,16 @@ func TestEditorDrag_AutoScroll(t *testing.T) {
 	}
 }
 
-// TestHandleKey_EscDoubleTapOpensMenu opens the menu after two Esc presses.
-func TestHandleKey_EscDoubleTapOpensMenu(t *testing.T) {
+// TestHandleKey_EscDoesNotOpenMenu pins that Esc alone, pressed any number
+// of times, never opens the menu. The old Esc-Esc double-tap was removed on
+// 2026-09-02; Esc arms the leader and a second Esc cancels it.
+func TestHandleKey_EscDoesNotOpenMenu(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if a.menuOpen {
-		t.Fatal("first Esc should not open menu")
-	}
-	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if !a.menuOpen {
-		t.Fatal("second Esc should open menu")
-	}
-	// Third Esc — menu open, should close.
-	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	if a.menuOpen {
-		t.Fatal("Esc with menu open should close it")
+	for i := 0; i < 3; i++ {
+		a.handleKey(keyEv(tcell.KeyEsc, 0))
+		if a.menuOpen {
+			t.Fatalf("Esc press %d opened the menu", i+1)
+		}
 	}
 }
 
@@ -1604,18 +1599,19 @@ func TestDrawStatusBar_OmitsBranchWhenEmpty(t *testing.T) {
 // spice-edit's when Vincent went read-only: New file / Rename file /
 // Delete file / Rename folder / Delete folder left the File actions
 // group, taking five rows with them. The Review group then arrived with
-// View diff and the changes-panel toggle.
+// View diff and the changes-panel toggle, and the 2026-09-02 key rework
+// added a Select all row to the Clipboard group.
 func TestMenuLayout_Baseline(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	items, dividers, h := a.menuLayout()
 
-	if h != 29 {
-		t.Errorf("modalHeight = %d, want 29", h)
+	if h != 30 {
+		t.Errorf("modalHeight = %d, want 30", h)
 	}
-	if got := len(items); got != 18 {
-		t.Errorf("item count = %d, want 18 built-ins", got)
+	if got := len(items); got != 19 {
+		t.Errorf("item count = %d, want 19 built-ins", got)
 	}
-	wantDiv := []int{2, 6, 10, 13, 16, 19, 24, 26}
+	wantDiv := []int{2, 6, 10, 13, 16, 19, 25, 27}
 	if len(dividers) != len(wantDiv) {
 		t.Fatalf("dividers = %v, want %v", dividers, wantDiv)
 	}
@@ -1657,17 +1653,18 @@ func TestMenuLayout_Shortcuts(t *testing.T) {
 		"Save & close tab":     "",
 		"Close tab":            "Esc w",
 		"Undo":                 "Esc u",
-		"Redo":                 "Esc r",
+		"Redo":                 "Esc U",
 		"Revert file":          "",
-		"Find in file":         "Esc f",
+		"Find in file":         "Esc /",
 		"Find file in project": "Esc p",
 		"Copy relative path":   "",
 		"Copy absolute path":   "",
 		"Copy selection":       "",
 		"Cut selection":        "",
 		"Paste":                "",
-		"Toggle line comment":  "Esc /",
-		"Hide file explorer":   "Esc t",
+		"Toggle line comment":  "",
+		"Select all":           "Esc a",
+		"Hide file explorer":   "Esc f",
 		"Quit editor":          "Esc q",
 	}
 

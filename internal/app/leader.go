@@ -5,12 +5,18 @@
 // Copyright: 2026 Cloudmanic, LLC. All rights reserved.
 // =============================================================================
 
-// leader.go defines the editor's Esc-leader hotkey table. Esc-Esc still opens
-// the action menu (handled in handleKey); the bindings here handle the
-// "Esc, then one rune within doubleEscMs" sequences for common
-// actions. We deliberately avoid Ctrl-key shortcuts because they fight
-// tmux/zellij prefixes and the terminal's own bindings — Esc is the only
-// modifier we trust over SSH.
+// leader.go defines Vincent's Esc-leader hotkey table. A single Esc arms
+// the leader; one rune within doubleEscMs fires the bound action; a second
+// Esc, or any unbound key, cancels. There is no Esc-Esc double-tap any more
+// (it used to open the menu — that is Esc m or a click on ≡ now), because
+// the person using Vincent never presses Esc by accident and the double-tap
+// cost a keystroke on every menu open. We deliberately avoid Ctrl-key
+// shortcuts because they fight tmux/zellij prefixes and the terminal's own
+// bindings — Esc is the only modifier we trust over SSH.
+//
+// Reworked 2026-09-02 (Chase Reynolds): f is the file panel, / is find,
+// U is redo, a is select-all, m is the menu. r, Enter, y, o, b, c, P, and t
+// are reserved for the review composer, git writes, and the tab bar toggle.
 
 package app
 
@@ -39,15 +45,16 @@ func leaderBindings() []leaderBinding {
 	return []leaderBinding{
 		{'s', (*App).menuSave},
 		{'u', (*App).menuUndo},
-		{'r', (*App).menuRedo},
+		{'U', (*App).menuRedo},
+		{'a', (*App).menuSelectAll},
 		{'w', (*App).menuClose},
 		{'q', (*App).menuQuit},
-		{'t', (*App).menuToggleSidebar},
-		{'/', (*App).menuToggleLineComment},
-		{'f', (*App).openFind},
+		{'f', (*App).menuToggleSidebar},
+		{'/', (*App).openFind},
 		{'p', (*App).openFinder},
 		{'d', (*App).menuViewDiff},
 		{'g', (*App).menuToggleGitPanel},
+		{'m', (*App).openMenu},
 	}
 }
 
