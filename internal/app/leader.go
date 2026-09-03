@@ -104,6 +104,8 @@ func leaderBindings() []leaderBinding {
 		{'o', "root", leaderGroupView, (*App).openRootPicker},
 		// Edit
 		{'s', "save", leaderGroupEdit, (*App).menuSave},
+		{'S', "save as", leaderGroupEdit, (*App).menuSaveAs},
+		{'n', "new file", leaderGroupEdit, (*App).menuNewFile},
 		{'u', "undo", leaderGroupEdit, (*App).menuUndo},
 		{'U', "redo", leaderGroupEdit, (*App).menuRedo},
 		{'a', "select all", leaderGroupEdit, (*App).menuSelectAll},

@@ -10,6 +10,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -150,15 +151,21 @@ func TestHandleFindKey_BackspaceLiveUpdates(t *testing.T) {
 }
 
 // TestEditorRect_ShrinksWhenFindOpen pins down the layout contract: the
-// editor body is one row shorter while the find bar is up. Without this
-// the bar would paint over the bottom row of code.
+// editor body is one row shorter while the find bar is up (and two rows
+// shorter once the replace row is revealed). Without this the bar would
+// paint over the bottom row of code.
 func TestEditorRect_ShrinksWhenFindOpen(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	_, _, _, hClosed := a.editorRect()
 	a.findOpen = true
 	_, _, _, hOpen := a.editorRect()
-	if hOpen != hClosed-findBarHeight {
-		t.Fatalf("editor height didn't shrink: closed=%d open=%d", hClosed, hOpen)
+	if hOpen != hClosed-1 {
+		t.Fatalf("editor height didn't shrink by one row: closed=%d open=%d", hClosed, hOpen)
+	}
+	a.findReplaceVisible = true
+	_, _, _, hReplaceOpen := a.editorRect()
+	if hReplaceOpen != hClosed-2 {
+		t.Fatalf("editor height didn't shrink by two rows with replace visible: closed=%d open=%d", hClosed, hReplaceOpen)
 	}
 }
 
@@ -202,5 +209,198 @@ func TestCloseAllModals_ClosesFindBar(t *testing.T) {
 	a.closeAllModals()
 	if a.findOpen {
 		t.Fatal("closeAllModals should close the find bar")
+	}
+}
+
+// TestHandleFindKey_TabRevealsAndFocusesReplace pins the reveal gesture:
+// the replace row starts hidden, and the first Tab both shows it and
+// moves focus onto it.
+func TestHandleFindKey_TabRevealsAndFocusesReplace(t *testing.T) {
+	a := seedFindApp(t, "foo")
+	a.openFind()
+	if a.findReplaceVisible {
+		t.Fatal("replace row should start hidden")
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0))
+	if !a.findReplaceVisible {
+		t.Fatal("Tab should reveal the replace row")
+	}
+	if !a.findReplaceFocus {
+		t.Fatal("Tab should focus the replace field on first press")
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0))
+	if !a.findReplaceVisible {
+		t.Fatal("a second Tab should not hide the row again")
+	}
+	if a.findReplaceFocus {
+		t.Fatal("a second Tab should move focus back to the find field")
+	}
+}
+
+// TestHandleFindKey_TypingRoutesToFocusedField checks that once the
+// replace field has focus, printable runes land there instead of in the
+// find query (and don't disturb it).
+func TestHandleFindKey_TypingRoutesToFocusedField(t *testing.T) {
+	a := seedFindApp(t, "foo bar")
+	a.openFind()
+	for _, r := range "foo" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0)) // focus replace
+	for _, r := range "baz" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	if got := string(a.findValue); got != "foo" {
+		t.Fatalf("find field should be untouched by replace typing, got %q", got)
+	}
+	if got := string(a.findReplaceValue); got != "baz" {
+		t.Fatalf("replace field = %q, want %q", got, "baz")
+	}
+}
+
+// TestHandleFindKey_EnterOnReplaceFieldReplacesAndAdvances drives the
+// whole UI path: type a query, reveal + focus replace, type a
+// replacement, press Enter, and check both the buffer and that the bar
+// stayed open with focus still on the replace field for the next one.
+func TestHandleFindKey_EnterOnReplaceFieldReplacesAndAdvances(t *testing.T) {
+	a := seedFindApp(t, "foo foo foo")
+	a.openFind()
+	for _, r := range "foo" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0))
+	for _, r := range "X" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	a.handleFindKey(keyEv(tcell.KeyEnter, 0))
+
+	tab := a.activeTabPtr()
+	if got := tab.Buffer.Lines[0]; got != "X foo foo" {
+		t.Fatalf("buffer = %q, want %q", got, "X foo foo")
+	}
+	if !a.findOpen {
+		t.Fatal("a single replace should not close the bar")
+	}
+	if !a.findReplaceFocus {
+		t.Fatal("focus should stay on the replace field so Enter can repeat")
+	}
+}
+
+// TestHandleFindKey_EnterOnReplaceField_RefusedOnDiffTab checks the
+// app-layer gate: replacing must be refused (with a flash, and no change
+// to the rendered diff) even though the same tab is perfectly findable.
+func TestHandleFindKey_EnterOnReplaceField_RefusedOnDiffTab(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab := editor.NewDiffTab("", nil)
+	tab.Buffer = editor.NewBuffer("foo bar")
+	a.tabs = []*editor.Tab{tab}
+	a.activeTab = 0
+
+	a.openFind()
+	for _, r := range "foo" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0))
+	a.handleFindKey(keyEv(tcell.KeyRune, 'X'))
+	a.handleFindKey(keyEv(tcell.KeyEnter, 0))
+
+	if got := tab.Buffer.Lines[0]; got != "foo bar" {
+		t.Fatalf("a diff tab must not be rewritten, got %q", got)
+	}
+	if a.statusMsg == "" {
+		t.Fatal("refusing the replace should flash a message")
+	}
+}
+
+// TestHandleFindKey_AltEnterReplacesAll drives Replace All through the
+// key handler: Alt+Enter should fire regardless of which field has
+// focus, since it acts on the whole match list rather than "the current
+// one".
+func TestHandleFindKey_AltEnterReplacesAll(t *testing.T) {
+	a := seedFindApp(t, "foo foo foo")
+	a.openFind()
+	for _, r := range "foo" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0))
+	for _, r := range "X" {
+		a.handleFindKey(keyEv(tcell.KeyRune, r))
+	}
+	a.handleFindKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModAlt))
+
+	tab := a.activeTabPtr()
+	if got := tab.Buffer.Lines[0]; got != "X X X" {
+		t.Fatalf("buffer = %q, want %q", got, "X X X")
+	}
+	if !tab.Undo() {
+		t.Fatal("Replace All through the bar should still be one undo step")
+	}
+	if got := tab.Buffer.Lines[0]; got != "foo foo foo" {
+		t.Fatalf("Undo after Replace All = %q, want original restored", got)
+	}
+}
+
+// TestFindBarHeight_GrowsWithReplaceRow pins the layout contract the
+// research doc called out: findBarHeight is what editorRect and
+// findBarRect both consult, so revealing the replace row grows the bar
+// (and shrinks the editor) by exactly one row.
+func TestFindBarHeight_GrowsWithReplaceRow(t *testing.T) {
+	a := seedFindApp(t, "foo")
+	a.openFind()
+	if got := a.findBarHeight(); got != 1 {
+		t.Fatalf("closed replace row: findBarHeight() = %d, want 1", got)
+	}
+	a.handleFindKey(keyEv(tcell.KeyTab, 0))
+	if got := a.findBarHeight(); got != 2 {
+		t.Fatalf("open replace row: findBarHeight() = %d, want 2", got)
+	}
+	_, _, _, h := a.findBarRect()
+	if h != 2 {
+		t.Fatalf("findBarRect height = %d, want 2", h)
+	}
+}
+
+// TestDrawFindBar_RendersBothRowsOnSimulationScreen is the drawing test:
+// once the replace row is visible, both the "Find:" and "Replace:"
+// labels must actually land on the screen, on two different rows.
+func TestDrawFindBar_RendersBothRowsOnSimulationScreen(t *testing.T) {
+	a := seedFindApp(t, "foo")
+	a.openFind()
+	a.handleFindKey(keyEv(tcell.KeyTab, 0)) // reveal + focus the replace row
+
+	a.drawFindBar()
+	a.screen.Show()
+	scr := a.screen.(tcell.SimulationScreen)
+	_, by, _, h := a.findBarRect()
+	if h != 2 {
+		t.Fatalf("bar height = %d, want 2", h)
+	}
+	findRow := screenLine(scr, by)
+	replaceRow := screenLine(scr, by+1)
+	if !strings.Contains(findRow, "Find:") {
+		t.Fatalf("find row = %q, want it to contain %q", findRow, "Find:")
+	}
+	if !strings.Contains(replaceRow, "Replace:") {
+		t.Fatalf("replace row = %q, want it to contain %q", replaceRow, "Replace:")
+	}
+}
+
+// TestDrawFindBar_OnlyOneRowWhenReplaceHidden guards against the replace
+// row bleeding onto screen (or the editor being shrunk for it) before
+// Tab has ever been pressed.
+func TestDrawFindBar_OnlyOneRowWhenReplaceHidden(t *testing.T) {
+	a := seedFindApp(t, "foo")
+	a.openFind()
+
+	a.drawFindBar()
+	a.screen.Show()
+	scr := a.screen.(tcell.SimulationScreen)
+	_, by, _, h := a.findBarRect()
+	if h != 1 {
+		t.Fatalf("bar height = %d, want 1", h)
+	}
+	findRow := screenLine(scr, by)
+	if !strings.Contains(findRow, "Find:") {
+		t.Fatalf("find row = %q, want it to contain %q", findRow, "Find:")
 	}
 }

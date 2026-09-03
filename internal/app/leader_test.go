@@ -34,8 +34,8 @@ func TestLeaderActionFor_AllBindingsResolve(t *testing.T) {
 // leaderActionFor reports a miss with nil so handleKey can distinguish
 // "leader fired" from "key was unbound — fall through".
 func TestLeaderActionFor_UnboundReturnsNil(t *testing.T) {
-	if leaderActionFor('n') != nil {
-		t.Fatal("'n' should not be a leader binding (no editor action mapped)")
+	if leaderActionFor('k') != nil {
+		t.Fatal("'k' should not be a leader binding (no editor action mapped)")
 	}
 }
 
@@ -224,11 +224,13 @@ func TestHandleKey_LeaderUnboundFallsThrough(t *testing.T) {
 	a := newTestApp(t, dir)
 	a.openFile(target)
 
-	// 'n' rather than the 'z' this test used to press: z became fold-all.
+	// 'k' rather than the 'z' this test used to press: z became fold-all,
+	// and 'n' became New File — both since bound, so 'k' is what's left
+	// genuinely unbound.
 	a.handleKey(keyEv(tcell.KeyEsc, 0))
-	a.handleKey(keyEv(tcell.KeyRune, 'n'))
+	a.handleKey(keyEv(tcell.KeyRune, 'k'))
 
-	if got := a.activeTabPtr().Buffer.Lines[0]; got != "n" {
+	if got := a.activeTabPtr().Buffer.Lines[0]; got != "k" {
 		t.Fatalf("unbound key after Esc should reach the editor, got %q", got)
 	}
 }

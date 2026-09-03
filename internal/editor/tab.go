@@ -339,6 +339,38 @@ func (t *Tab) SaveOverwrite() error {
 	return t.write()
 }
 
+// SaveAs writes the buffer to a new path and, on success, retargets this
+// tab to it: Path moves to the new file, Title is cleared so DisplayName
+// recomputes off the new basename instead of showing a stale one, and the
+// revert/conflict-detection anchor (undoOriginal) is reset to the
+// just-written content — this tab is now "the file at path", so reverting
+// or detecting a disk conflict from here on has to compare against what is
+// actually on disk at the new location, not the old file's original
+// content.
+//
+// undoStack and redoStack are left alone on purpose. Save As doesn't erase
+// the user's typing history; it only changes where the tab's identity and
+// its revert anchor point.
+//
+// path is used unconditionally — like SaveOverwrite, it is the caller's
+// job to have already asked about clobbering an existing file. Fails (and
+// leaves the tab untouched) on a read-only tab, the same guard write() has
+// for a plain Save.
+func (t *Tab) SaveAs(path string) error {
+	if t.ReadOnly() {
+		return fmt.Errorf("%s tabs are read-only", t.Mode)
+	}
+	oldPath, oldTitle := t.Path, t.Title
+	t.Path = path
+	t.Title = ""
+	if err := t.write(); err != nil {
+		t.Path, t.Title = oldPath, oldTitle
+		return err
+	}
+	t.undoOriginal = t.captureSnapshot()
+	return nil
+}
+
 // write is the actual save: it puts the buffer on disk, clears Dirty,
 // DiskGone and Conflict, and refreshes Mtime so the disk-reconcile loop
 // doesn't immediately think the file we just wrote was changed by someone
@@ -482,6 +514,30 @@ func (t *Tab) InsertString(s string) {
 	t.Dirty = true
 	t.StyleStale = true
 	t.cursorMoved = true
+}
+
+// InsertNewlineIndented inserts a newline at the cursor and carries the
+// leading whitespace of whichever line the newline lands on out onto the
+// fresh line, so typing after Enter continues at the same indent instead
+// of column 0. The reference line is the start of the selection when
+// there is one (PosOrdered) — Enter always replaces a selection with the
+// new line, and it is the line the replacement lands on, not wherever the
+// selection happened to end, that indentation should be read from.
+//
+// Implemented as a single InsertString call ("\n" + indent) so the whole
+// thing is one undo step, the same as a plain Enter press always has been
+// — there is no reason splitting the indent out into its own step would
+// ever help an undo.
+func (t *Tab) InsertNewlineIndented() {
+	if t.ReadOnly() {
+		return
+	}
+	start, _ := PosOrdered(t.Anchor, t.Cursor)
+	indent := ""
+	if t.Buffer != nil && start.Line >= 0 && start.Line < len(t.Buffer.Lines) {
+		indent = leadingWhitespace(t.Buffer.Lines[start.Line])
+	}
+	t.InsertString("\n" + indent)
 }
 
 // InsertRune inserts a single typed character at the cursor. Coalesces

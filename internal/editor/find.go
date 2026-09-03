@@ -187,3 +187,67 @@ func (t *Tab) ClearFind() {
 	t.FindMatches = nil
 	t.FindIndex = -1
 }
+
+// ReplaceCurrentMatch replaces the text of the current find match with
+// replacement and advances to whatever match now sits at or after the
+// insertion point — the same "next" behaviour Enter gives in the find-only
+// bar. Returns false (and does nothing) when there is no current match or
+// the tab is read-only; the app layer is expected to gate the replace key
+// on !ReadOnly() before calling this, but the check belongs here too, for
+// the same belt-and-braces reason every other mutator on Tab checks it.
+//
+// The match is replaced by selecting it (Anchor at its start, Cursor at
+// its end) and going through InsertString, which is what makes this a
+// single undo step: InsertString sees the selection, has DeleteSelection
+// record the pre-replace state, and performs the insert itself without a
+// second push.
+func (t *Tab) ReplaceCurrentMatch(replacement string) bool {
+	if t.ReadOnly() || t.FindIndex < 0 || t.FindIndex >= len(t.FindMatches) {
+		return false
+	}
+	m := t.FindMatches[t.FindIndex]
+	t.Anchor = MatchPosition(m)
+	t.Cursor = MatchEndPosition(m)
+	t.InsertString(replacement)
+	// Re-run the search against the now-changed buffer and let
+	// FirstMatchAtOrAfter (inside SetFindQuery) pick up wherever the
+	// cursor landed — which is the end of what we just inserted, so this
+	// naturally skips the text we just wrote and lands on the next real
+	// match instead of re-triggering on it.
+	t.SetFindQuery(t.FindQuery)
+	t.FocusCurrentMatch()
+	return true
+}
+
+// ReplaceAll replaces every current match with replacement in one undo
+// step and returns how many replacements were made. Matches are applied
+// back to front — last match in the document first — so replacing one
+// never shifts the line/column of a match still waiting its turn; walking
+// front to back would require re-running FindAll after every edit just to
+// keep the remaining offsets valid.
+//
+// This bypasses InsertString/DeleteSelection deliberately: those each
+// record their own undo step, and forty individual pushes for a
+// forty-match Replace All is exactly the "undo forty times" bug the
+// coalescing model in undo.go exists to avoid for typing. One
+// pushUndo(undoGroupStructural) up front, then raw Buffer edits, gives one
+// entry that restores every match in a single Undo.
+func (t *Tab) ReplaceAll(replacement string) int {
+	if t.ReadOnly() || t.Buffer == nil || len(t.FindMatches) == 0 {
+		return 0
+	}
+	t.pushUndo(undoGroupStructural)
+	n := len(t.FindMatches)
+	for i := n - 1; i >= 0; i-- {
+		m := t.FindMatches[i]
+		pos := t.Buffer.DeleteRange(MatchPosition(m), MatchEndPosition(m))
+		t.Buffer.InsertString(pos, replacement)
+	}
+	t.Cursor = t.Buffer.Clamp(t.Cursor)
+	t.Anchor = t.Cursor
+	t.Dirty = true
+	t.StyleStale = true
+	t.cursorMoved = true
+	t.SetFindQuery(t.FindQuery)
+	return n
+}

@@ -197,3 +197,26 @@ func TestDetectIndent_MixedFavorsMajority(t *testing.T) {
 		t.Fatalf("expected tab from majority, got %q", got)
 	}
 }
+
+// TestLeadingWhitespace pins the helper InsertNewlineIndented relies on:
+// it captures a run of spaces and/or tabs verbatim (unlike leadingSpaces,
+// which only counts ' ' for DetectIndent's sampling) and stops at the
+// first other byte.
+func TestLeadingWhitespace(t *testing.T) {
+	cases := []struct {
+		line string
+		want string
+	}{
+		{"    foo", "    "},
+		{"\t\tfoo", "\t\t"},
+		{"\t  foo", "\t  "},
+		{"foo", ""},
+		{"", ""},
+		{"   ", "   "},
+	}
+	for _, c := range cases {
+		if got := leadingWhitespace(c.line); got != c.want {
+			t.Fatalf("leadingWhitespace(%q) = %q, want %q", c.line, got, c.want)
+		}
+	}
+}

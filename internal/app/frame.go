@@ -125,9 +125,13 @@ type frameKey struct {
 	// same fail-safe reason the modal bools are.
 	pushing bool
 
-	findOpen   bool
-	findCursor int
-	findScroll int
+	findOpen           bool
+	findCursor         int
+	findScroll         int
+	findReplaceVisible bool
+	findReplaceFocus   bool
+	findReplaceCursor  int
+	findReplaceScroll  int
 
 	dragMode  string
 	activeTab int
@@ -201,15 +205,19 @@ func (a *App) frameKey() frameKey {
 		commitScroll: a.commitScroll,
 		pushing:      a.pushing,
 
-		findOpen:    a.findOpen,
-		findCursor:  a.findCursor,
-		findScroll:  a.findScroll,
-		dragMode:    a.dragMode,
-		activeTab:   a.activeTab,
-		tabCount:    len(a.tabs),
-		leaderArmed: a.leaderArmed(),
-		statusMsg:   a.statusMsg,
-		flashLive:   a.statusMsg != "" && time.Now().Before(a.statusUntil),
+		findOpen:           a.findOpen,
+		findCursor:         a.findCursor,
+		findScroll:         a.findScroll,
+		findReplaceVisible: a.findReplaceVisible,
+		findReplaceFocus:   a.findReplaceFocus,
+		findReplaceCursor:  a.findReplaceCursor,
+		findReplaceScroll:  a.findReplaceScroll,
+		dragMode:           a.dragMode,
+		activeTab:          a.activeTab,
+		tabCount:           len(a.tabs),
+		leaderArmed:        a.leaderArmed(),
+		statusMsg:          a.statusMsg,
+		flashLive:          a.statusMsg != "" && time.Now().Before(a.statusUntil),
 	}
 	if tab := a.activeTabPtr(); tab != nil {
 		k.tabPath = tab.Path

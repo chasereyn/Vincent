@@ -149,6 +149,20 @@ func leadingSpaces(s string) int {
 	return n
 }
 
+// leadingWhitespace returns the leading run of spaces and tabs in line,
+// stopping at the first byte that is neither. Used to carry a line's
+// indentation onto the new line an Enter press creates — unlike
+// leadingSpaces (which only counts ' ' for DetectIndent's sampling), this
+// preserves the actual characters so a tab-indented line stays tab-indented
+// after Enter.
+func leadingWhitespace(line string) string {
+	i := 0
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	return line[:i]
+}
+
 // defaultIndentForPath returns "\t" for languages whose conventions strongly
 // prefer or require tabs (Go's gofmt rewrites to tabs; Makefiles literally
 // require tabs at the start of recipe lines; TSV is tab-separated by name).
