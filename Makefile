@@ -73,7 +73,7 @@ endif
 # Override on the command line if yours differs: make install INSTALL_DIR=...
 INSTALL_DIR ?= $(HOME_DIR)/.local/bin
 
-.PHONY: run build install build-linux build-mac test test-race test-short coverage tidy clean help
+.PHONY: run build install build-linux build-mac release-build test test-race test-short coverage tidy clean help
 
 # help is the default target so `make` with no args prints what's available.
 help:
@@ -84,6 +84,7 @@ help:
 	@echo "  make install      Build and copy to $(INSTALL_DIR)."
 	@echo "  make build-linux  Cross-compile a static linux/amd64 binary."
 	@echo "  make build-mac    Cross-compile a static darwin/arm64 binary."
+	@echo "  make release-build  Build all three release binaries into ./bin."
 	@echo "  make test         Run the full suite."
 	@echo "  make test-race    Run with -race (needs cgo; CI parity)."
 	@echo "  make test-short   Skip slow tests - quick iteration loop."
@@ -140,6 +141,16 @@ build-linux: | bin
 # cross-compile keeps working is the point of having the target.
 build-mac: | bin
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags='-s -w' -o bin/$(BINARY)-darwin-arm64 .
+
+# release-build reproduces .github/workflows/release.yml locally: the same
+# three platforms, the same flags (-trimpath added, matching CI byte for
+# byte), all landing in ./bin so a human can inspect or hand-upload a
+# release without waiting on Actions. Named binaries carry their GOOS/GOARCH
+# the same way the release assets do, .exe included on Windows.
+release-build: | bin
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-darwin-arm64 .
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-linux-amd64 .
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-windows-amd64.exe .
 
 # test runs the full suite. Deliberately WITHOUT -race: the race detector
 # requires cgo, and this machine builds with CGO_ENABLED=0 (no C compiler,

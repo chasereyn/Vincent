@@ -437,6 +437,28 @@ catches problems in, and every new background worker — the git status
 poller, the multi-repo indexer, the content-search pool — lands in that
 pattern. Do not assume local green means race-free.
 
+## Shipping
+
+A release is a tag, nothing more:
+
+1. Bump `internal/version/version.go`.
+2. Commit that bump.
+3. `git tag vX.Y.Z`
+4. `git push origin master vX.Y.Z`
+
+Pushing the tag is the trigger. `.github/workflows/release.yml` runs
+`go test ./...`, cross-compiles `vincent-darwin-arm64`,
+`vincent-linux-amd64`, and `vincent-windows-amd64.exe`, and attaches all
+three to a GitHub release for that tag with generated release notes. `make
+release-build` runs the same three builds into `./bin` locally, for
+checking a release before it ships.
+
+CI (`.github/workflows/test.yml`) now watches `master`, not `main` — it
+pointed at the wrong branch since the repo was created and had never once
+run on a real push. `.github/workflows/close-prs.yml` closes any pull
+request on open or reopen with a comment pointing at `CONTRIBUTING.md`;
+Vincent is a personal tool and does not take contributions.
+
 ## Conventions inherited from upstream (keep them)
 
 - **A doc comment above every function**, exported and unexported, saying
@@ -552,7 +574,7 @@ starting its phase.
 | 6b | Editor: find/replace, new file, save-as, triple-click line select, Enter carries indent | **done** |
 | 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | **done** |
 | 8 | Multi-repo workspace + content search (`Esc F`) + in-process Myers diff | **done**, unseen on a real terminal |
-| 9 | Ship: README, releases via Actions, lock contributions, explainers | |
+| 9 | Ship: README, releases via Actions, lock contributions, explainers | **done**, except Buy Me a Coffee — Chase dropped that item |
 
 **Phase 8 is still wanted; do not trim it because `Esc o` exists.** Confirmed
 by Chase on 2026-09-03: at work the root is `~/Developer/RP-Repos`, a flat
