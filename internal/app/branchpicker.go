@@ -511,10 +511,14 @@ func (a *App) drawBranchPicker() {
 	// Filter input — the finder's field, including its horizontal scroll.
 	inputStyle := tcell.StyleDefault.Background(a.theme.BG).Foreground(a.theme.Text)
 	fieldStart := mx + 3
-	fieldEnd := mx + mw - 4
+	fieldEnd := mx + mw - 3
 	fieldWidth := fieldEnd - fieldStart
 	st.scroll = scrollWindow(st.cursor, st.scroll, fieldWidth)
-	for cx := fieldStart - 1; cx <= fieldEnd; cx++ {
+	// Fill the whole inner width, border to border, the same span the
+	// list rows below fill. Stopping at the field's own edge left a
+	// notch at the top-right corner where the row fill ran wider than
+	// the input fill; Chase spotted it on 2026-09-03.
+	for cx := mx + 1; cx <= mx+mw-2; cx++ {
 		a.screen.SetContent(cx, my+3, ' ', nil, inputStyle)
 	}
 	for i := 0; i < fieldWidth; i++ {
