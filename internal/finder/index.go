@@ -7,7 +7,7 @@
 
 package finder
 
-// Index building. Two strategies, in priority order:
+// Index building. Two strategies per repo, in priority order:
 //
 //  1. Git fast path. If the project is a git repo, shell out to
 //     `git ls-files --cached --others --exclude-standard -z`. This
@@ -22,9 +22,21 @@ package finder
 //     ignore set so dot-dirs and node_modules don't blow up the
 //     result count.
 //
-// Both paths return a sorted []string of project-relative paths
-// using forward slashes regardless of host OS, so the scorer and
-// renderer can treat the strings uniformly.
+// Vincent's root is not always a repo (Phase 8, internal/repos): at work
+// the root is a flat folder of company repos, and the old single-strategy
+// BuildIndex would fall through to strategy 2 over the WHOLE root, which
+// walks every repo's build output and vendored dependencies by hand
+// instead of asking git to skip them. BuildIndex now uses repos.Discover
+// to find every repo at or under the root, indexes each one with its own
+// git-fast-path-or-walk (run concurrently, bounded), prefixes each repo's
+// paths with its folder relative to the root, and walks only whatever is
+// left over — the part of the root that isn't inside any repo. When the
+// root IS a repo (the common single-project case), Discover reports just
+// the root itself and BuildIndex takes the old single-repo path byte for
+// byte; see TestBuildIndex_RootIsRepoUnchanged.
+//
+// Every path returned is root-relative with forward slashes regardless of
+// host OS, so the scorer and renderer can treat the strings uniformly.
 
 import (
 	"bytes"
@@ -35,9 +47,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	gitignore "github.com/sabhiram/go-gitignore"
+
+	"github.com/chasereyn/vincent/internal/repos"
 )
+
+// maxConcurrentRepoIndexBuilds bounds how many `git ls-files` (or walk)
+// index builds run at once when the root is a folder of repos. A work
+// root can hold dozens of repos; forking git for all of them at once
+// would spike the process table and starve the one the user is actually
+// looking at. Eight matches the search engine's own worker cap (Phase 8b)
+// for the same reason: past a handful of concurrent forks/reads, more
+// concurrency just adds scheduling overhead on typical hardware.
+const maxConcurrentRepoIndexBuilds = 8
 
 // hardcodedIgnores is the floor we apply in the *fallback* path —
 // non-git projects that don't have a .gitignore at all still don't
@@ -72,20 +96,122 @@ var hardcodedIgnores = map[string]struct{}{
 // index.
 const maxIndexEntries = 200_000
 
-// BuildIndex returns a sorted slice of project-relative file paths
-// rooted at rootDir, honouring gitignore rules. Tries git first,
-// falls back to a manual walk on any failure. The boolean reports
-// which strategy actually ran (true = git fast path) — handy for
-// tests that want to assert one or the other.
+// BuildIndex returns a sorted slice of rootDir-relative file paths,
+// honouring gitignore rules. When rootDir is itself a git repo this is
+// exactly the old single-repo behaviour: git fast path, falling back to a
+// manual walk on any failure. When rootDir is a folder containing one or
+// more repos (or none at all), it indexes each discovered repo separately
+// and prefixes their paths with the repo's folder relative to rootDir,
+// then walks whatever part of rootDir isn't inside any repo. The boolean
+// reports whether at least one git fast path ran — handy for tests that
+// want to assert git was actually used rather than the fallback walk.
 func BuildIndex(rootDir string) ([]string, bool, error) {
 	if rootDir == "" {
 		return nil, false, errors.New("finder: empty rootDir")
 	}
-	if paths, err := buildIndexGit(rootDir); err == nil {
-		return paths, true, nil
+	rootDir = filepath.Clean(rootDir)
+	repoDirs := repos.Discover(rootDir)
+	if len(repoDirs) == 1 && repoDirs[0] == rootDir {
+		// rootDir is itself a repo: nothing nested in it needs separate
+		// treatment (Discover already folded any submodule/nested clone
+		// into this single entry), so this is byte-identical to the
+		// pre-Phase-8 single-repo code path.
+		if paths, err := buildIndexGit(rootDir); err == nil {
+			return paths, true, nil
+		}
+		paths, err := buildIndexWalk(rootDir)
+		return paths, false, err
 	}
-	paths, err := buildIndexWalk(rootDir)
-	return paths, false, err
+	return buildIndexMultiRoot(rootDir, repoDirs)
+}
+
+// repoIndexResult is one repo's contribution to a multi-root build,
+// collected by index so the concurrent builders below can write into a
+// pre-sized slice without a lock.
+type repoIndexResult struct {
+	paths  []string
+	viaGit bool
+}
+
+// buildIndexMultiRoot builds the index for a root that is not itself a
+// repo: one goroutine per discovered repo (bounded by
+// maxConcurrentRepoIndexBuilds), each indexing its own repo and prefixing
+// the result with the repo's rootDir-relative folder, plus a single walk
+// of rootDir that skips descending into any of those repo folders (using
+// the same skip-list walk BuildIndex always used, so a repo's own build
+// output never gets indexed twice under two different prefixes).
+func buildIndexMultiRoot(rootDir string, repoDirs []string) ([]string, bool, error) {
+	results := make([]repoIndexResult, len(repoDirs))
+	if len(repoDirs) > 0 {
+		sem := make(chan struct{}, maxConcurrentRepoIndexBuilds)
+		var wg sync.WaitGroup
+		for i, repoDir := range repoDirs {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, repoDir string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				results[i] = buildRepoIndexEntry(rootDir, repoDir)
+			}(i, repoDir)
+		}
+		wg.Wait()
+	}
+
+	exclude := make(map[string]bool, len(repoDirs))
+	for _, r := range repoDirs {
+		exclude[r] = true
+	}
+	unowned, err := buildIndexWalkExcluding(rootDir, exclude)
+	if err != nil {
+		return nil, false, err
+	}
+
+	anyGit := false
+	all := make([]string, 0, len(unowned))
+	for _, r := range results {
+		all = append(all, r.paths...)
+		if r.viaGit {
+			anyGit = true
+		}
+	}
+	all = append(all, unowned...)
+	sort.Strings(all)
+	if len(all) > maxIndexEntries {
+		all = all[:maxIndexEntries]
+	}
+	return all, anyGit, nil
+}
+
+// buildRepoIndexEntry indexes one repo (git fast path, falling back to a
+// walk) and rewrites every path to be relative to rootDir instead of the
+// repo itself, so a repo two levels down still reports paths the rest of
+// the index can join with the root-relative results from other repos and
+// from the leftover walk. Runs on a worker goroutine — no shared state
+// beyond the slice slot the caller already allocated for it.
+func buildRepoIndexEntry(rootDir, repoDir string) repoIndexResult {
+	paths, viaGit, err := func() ([]string, bool, error) {
+		if p, err := buildIndexGit(repoDir); err == nil {
+			return p, true, nil
+		}
+		p, err := buildIndexWalk(repoDir)
+		return p, false, err
+	}()
+	if err != nil {
+		// A repo whose index we genuinely can't build (permission error,
+		// git AND the walk both failing) contributes nothing rather than
+		// aborting the whole multi-root build over one bad repo.
+		return repoIndexResult{}
+	}
+	prefix, relErr := filepath.Rel(rootDir, repoDir)
+	if relErr != nil {
+		prefix = repoDir
+	}
+	prefix = filepath.ToSlash(prefix)
+	prefixed := make([]string, len(paths))
+	for i, p := range paths {
+		prefixed[i] = prefix + "/" + p
+	}
+	return repoIndexResult{paths: prefixed, viaGit: viaGit}
 }
 
 // buildIndexGit shells out to `git ls-files` to collect every
@@ -139,6 +265,17 @@ func buildIndexGit(rootDir string) ([]string, error) {
 // .gitignore covers >95% of real cases, and a non-git project
 // usually only has one .gitignore anyway.
 func buildIndexWalk(rootDir string) ([]string, error) {
+	return buildIndexWalkExcluding(rootDir, nil)
+}
+
+// buildIndexWalkExcluding is buildIndexWalk plus one more skip rule: any
+// directory whose absolute path is a key in exclude (nil is fine — the
+// zero value of a nil map always reports "not found") is pruned entirely,
+// the same way hardcodedIgnores prunes node_modules. This is what lets
+// buildIndexMultiRoot walk "the part of the root that isn't inside any
+// repo" without re-walking (and re-indexing under a different path) a
+// repo that already got its own git-fast-path build.
+func buildIndexWalkExcluding(rootDir string, exclude map[string]bool) ([]string, error) {
 	ig := loadProjectGitignore(rootDir)
 	paths := make([]string, 0, 4096)
 
@@ -153,6 +290,9 @@ func buildIndexWalk(rootDir string) ([]string, error) {
 		}
 		if path == rootDir {
 			return nil
+		}
+		if d.IsDir() && exclude[path] {
+			return fs.SkipDir
 		}
 		base := d.Name()
 		if _, hit := hardcodedIgnores[base]; hit {

@@ -152,6 +152,39 @@ func TestFinder_SearchEmptyQueryReturnsAlphabetical(t *testing.T) {
 	}
 }
 
+// TestFinder_PathsReturnsFullUnrankedIndex pins Paths()'s contract for
+// Phase 8b's content search: every indexed path comes back, in whatever
+// order BuildIndex produced (sorted), with no fuzzy scoring applied —
+// unlike Search, which needs a query to rank against.
+func TestFinder_PathsReturnsFullUnrankedIndex(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, dir, "z.go", "x")
+	mustWrite(t, dir, "a.go", "x")
+
+	f := New(dir)
+	if got := f.Paths(); got != nil {
+		t.Fatalf("Paths before Rebuild: got %v, want nil", got)
+	}
+
+	done := make(chan struct{})
+	f.Rebuild(func() { close(done) })
+	<-done
+
+	got := f.Paths()
+	want := []string{"a.go", "z.go"}
+	if !sliceEqual(got, want) {
+		t.Fatalf("Paths: got %v, want %v", got, want)
+	}
+
+	// The returned slice must be a copy: mutating it must not corrupt the
+	// Finder's own cache for the next caller.
+	got[0] = "corrupted"
+	again := f.Paths()
+	if again[0] != "a.go" {
+		t.Fatalf("Paths returned a shared slice: mutation leaked, got %v", again)
+	}
+}
+
 // TestFinder_InvalidateResetsState pins the invalidate-then-rebuild
 // pattern app callers use after file mutations: after Invalidate,
 // State drops back to Idle until Rebuild is called.
