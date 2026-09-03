@@ -817,7 +817,7 @@ func TestSidebarClick_RootRowResetsActiveFolder(t *testing.T) {
 		t.Fatal("seed broken: active folder should start as subfolder")
 	}
 
-	a.sidebarClick(1, 1) // (col=1, row=1) is the project name row
+	a.sidebarClick(1, 2) // (col=1, row=2) is the project name row, under the title and its rule
 
 	if a.activeFolder != a.rootDir {
 		t.Errorf("active folder = %q, want root %q", a.activeFolder, a.rootDir)

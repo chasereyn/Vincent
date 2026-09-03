@@ -285,7 +285,7 @@ internal/clipboard           50  OSC 52 — works over SSH and through tmux
 These are hard requirements from the person this is built for. Do not
 trade them away for convenience.
 
-1. **`#030405` background, set explicitly**, never `tcell.ColorDefault` —
+1. **`#030405` background, set explicitly**, never `tcell.ColorDefault` — (the two side panes sit one shade above it at `#090a0d`, asked for on 2026-09-03; the editor ground itself is still `#030405`) —
    that inherits the host terminal and will not reliably match. This is
    Chase's Ghostty background and the ground his Zed is re-based onto. The
    whole palette is his Zed: the Ayu Darker extension plus his
@@ -320,6 +320,27 @@ trade them away for convenience.
    action needs discovering, give it a leader key and it appears in the
    cheatsheet for free.
 
+### 2026-09-03, after the first 0.6.0 session
+
+Nine small chrome changes, all from one screenshot. Decisions, not
+preferences:
+
+- Pane defaults are 36 (tree) and 40 (Changes), measured off the widths
+  Chase had dragged them to. The 40% startup cap still applies to the tree.
+- `SidebarBG` is `#090a0d`, one shade above the `#030405` editor ground.
+- `StatusFG` is lavender `#d2a6ff` so the status bar reads as a different
+  kind of text from the blue accent above it.
+- The tree header is "Explorer" in accent bold with a rule under it, the
+  same shape as the Changes header. `headerRows` in `filetree.go` is 3
+  (title, rule, root name) and HitTest, hover, and Render all read it.
+- Indent guides end with `└` on a folder's last child and go blank below
+  it. `guideSegment` is the whole rule.
+- Hidden folders are the same colour as other folders; hidden files still
+  dim.
+- With icons on, files and folders both draw glyph + two spaces + name, so
+  siblings start their names in the same column.
+- The Changes panel puts a blank row between repo groups.
+
 ### 2026-09-02, after the first real session
 
 Three changes came out of the owner using 0.3.0 on a terminal for the
@@ -334,7 +355,7 @@ without asking.
   of UI whose job is naming the keys was naming the wrong ones. **Add a
   binding to `leader.go` with a hint and a group and it documents
   itself in both places.**
-- **`defaultSidebarWidth` is 60, not 30.** A reviewer reads paths out of
+- **`defaultSidebarWidth` was 60, not 30**, from 2026-09-02 to 2026-09-03; it is now 36 and `defaultGitPanelWidth` is 40, both read off a screenshot of the widths Chase had dragged the panes to on a 240-column window. The rest of this note still holds. A reviewer reads paths out of
   that panel, not code, and at 30 cells a nested package name was clipped
   before the filename started. `clampStartupSidebar` caps it at 40% of
   the window on the **first sized frame only** — one shot, because

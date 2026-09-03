@@ -235,18 +235,34 @@ func shouldHide(name string) bool {
 type flatNode struct {
 	Node  *Node
 	Depth int
+	// LastAt[d] reports whether the node on this row's ancestry path at
+	// depth d is the last of its siblings; LastAt[Depth] is the row's own
+	// node. drawNodeRow reads it to end a folder's guide line with └ on
+	// the last child and to leave the column blank below that, so the
+	// eye can see where a folder's children stop.
+	LastAt []bool
 }
 
 // flattenInto appends node into out. If node is an expanded directory, it
 // recursively appends its children at depth+1.
 func flattenInto(n *Node, depth int, out *[]flatNode) {
+	flattenIntoWithPath(n, depth, true, nil, out)
+}
+
+// flattenIntoWithPath is flattenInto carrying the ancestry's last-sibling
+// flags. last says whether n is the last child of its parent; ancestors
+// holds the same flag for every depth above n.
+func flattenIntoWithPath(n *Node, depth int, last bool, ancestors []bool, out *[]flatNode) {
 	if n == nil {
 		return
 	}
-	*out = append(*out, flatNode{Node: n, Depth: depth})
+	lastAt := make([]bool, depth+1)
+	copy(lastAt, ancestors)
+	lastAt[depth] = last
+	*out = append(*out, flatNode{Node: n, Depth: depth, LastAt: lastAt})
 	if n.IsDir && n.Expanded {
-		for _, c := range n.Children {
-			flattenInto(c, depth+1, out)
+		for i, c := range n.Children {
+			flattenIntoWithPath(c, depth+1, i == len(n.Children)-1, lastAt, out)
 		}
 	}
 }
@@ -263,14 +279,21 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		}
 	}
 
-	// Header — small all-caps label above the project name. The
-	// project name itself is also a click target: it's the only way
-	// to reset the active folder back to the root once a subfolder
-	// has been selected. Render bold/Accent when it *is* the active
-	// folder, plain text otherwise — same visual rule the children
-	// rows follow, so the highlight is honest.
-	headerStyle := tcell.StyleDefault.Background(bg).Foreground(th.Muted).Bold(true)
-	drawString(scr, x, y, w, " EXPLORER", headerStyle)
+	// Header — "Explorer" in the same accent-bold the Changes panel
+	// uses for its title, with a rule under it, so the two panes read as
+	// siblings. It was a muted all-caps EXPLORER until 2026-09-03, when
+	// Chase saw it beside the Changes header and called it out. The
+	// project name row below is also a click target: it's the only way
+	// to reset the active folder back to the root once a subfolder has
+	// been selected. Render bold/Accent when it *is* the active folder,
+	// plain text otherwise — same visual rule the children rows follow,
+	// so the highlight is honest.
+	headerStyle := tcell.StyleDefault.Background(bg).Foreground(th.Accent).Bold(true)
+	drawString(scr, x, y, w, " Explorer", headerStyle)
+	ruleStyle := tcell.StyleDefault.Background(bg).Foreground(th.Subtle)
+	for cx := x; cx < x+w; cx++ {
+		scr.SetContent(cx, y+1, '─', nil, ruleStyle)
+	}
 	rootActive := t.ActiveFolder == "" || t.ActiveFolder == t.Root.Path
 	rootStyle := tcell.StyleDefault.Background(bg).Foreground(th.Text).Bold(true)
 	if rootActive {
@@ -279,7 +302,7 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	if rootChange := t.DirtyFolders[t.Root.Path]; rootChange != GitChangeNone {
 		rootStyle = rootStyle.Foreground(gitChangeColor(th, rootChange))
 	}
-	drawString(scr, x, y+1, w, " "+t.Root.Name, rootStyle)
+	drawString(scr, x, y+headerRows-1, w, " "+t.Root.Name, rootStyle)
 
 	// Build the flat list of visible rows from the root's children.
 	flat := make([]flatNode, 0, 128)
@@ -287,8 +310,8 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		flattenInto(c, 0, &flat)
 	}
 
-	listTop := y + 2
-	listH := h - 2
+	listTop := y + headerRows
+	listH := h - headerRows
 	if listH < 0 {
 		listH = 0
 	}
@@ -308,12 +331,12 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 		// Full-width row background: the active/selected row wins over a
 		// hover, and either wins over the plain sidebar ground. Painted
 		// before drawNodeRow so the row's text and glyph sit on top of it.
-		// localY mirrors HitTest's convention (row+2, since row 0 is the
-		// EXPLORER header and row 1 is the project root) so HoverY — set
+		// localY mirrors HitTest's convention (row+headerRows: the
+		// Explorer title, its rule, then the project root) so HoverY — set
 		// by the app from the same local coordinates HitTest takes — lines
 		// up with the row it was recorded against.
 		rowY := listTop + row
-		localY := row + 2
+		localY := row + headerRows
 		rowBG := bg
 		switch {
 		case active:
@@ -396,7 +419,11 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	} else {
 		fg = th.FileColor
 	}
-	if strings.HasPrefix(item.Node.Name, ".") {
+	if strings.HasPrefix(item.Node.Name, ".") && !item.Node.IsDir {
+		// Hidden files dim; hidden folders do not. Chase asked on
+		// 2026-09-03 for every folder to be one colour — a home directory
+		// is mostly dotfolders, and greying them out left the tree
+		// two-toned for no reason a reviewer cares about.
 		fg = th.Muted
 	}
 	if active {
@@ -424,7 +451,7 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 		if remaining() <= 0 {
 			break
 		}
-		drawString(scr, col, y, remaining(), "│ ", guideStyle)
+		drawString(scr, col, y, remaining(), guideSegment(item, i), guideStyle)
 		col += 2
 	}
 
@@ -441,7 +468,14 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 		// withIcons: leave chevOrBlank empty — the folder glyph below
 		// takes this slot instead of sitting beside the chevron.
 	} else {
-		chevOrBlank = "  "
+		if !withIcons {
+			chevOrBlank = "  "
+		}
+		// withIcons: a file's glyph takes the same column a folder's
+		// does, so files and folders at one depth start their names in
+		// the same column. Before 2026-09-03 files kept the two-space
+		// chevron gutter and sat two cells right of their sibling
+		// folders, which read as a nesting that was not there.
 		suffix = item.Node.Name
 	}
 	drawString(scr, col, y, remaining(), chevOrBlank, rowStyle)
@@ -468,18 +502,35 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 
 	drawString(scr, col, y, remaining(), glyph, glyphStyle)
 	col += runeLen(glyph)
-	// A folder's glyph already occupies the chevron's old column, so it
-	// only needs a single space before the name — matching the chevron's
-	// original "chev + one space" width. A file's glyph is new real
-	// estate beside its existing two-space chevron gutter, so it keeps
-	// the wider two-space gap that look was tuned with.
+	// Two spaces after every glyph, folder or file. Nerd Font glyphs are
+	// drawn wider than one cell and spill into the space after them, so
+	// one space looked like none on folders while files, with two, had a
+	// visible gap. Same gap for both is what Chase asked for.
 	sep := "  "
-	if item.Node.IsDir {
-		sep = " "
-	}
 	drawString(scr, col, y, remaining(), sep+suffix, rowStyle)
 	col += runeLen(sep + suffix)
 	drawBranchSuffix(scr, th, col, y, remaining(), bg, branch)
+}
+
+// guideSegment is the two-cell indent guide drawn at position i of a row
+// at item.Depth. Position i belongs to the ancestor at depth i+1, which is
+// the row's own node for the innermost position. The innermost segment is
+// └ when the node is the last of its siblings and │ otherwise; outer
+// segments are │ while that ancestor still has siblings below and blank
+// once it does not, so the line stops where the folder's children stop.
+func guideSegment(item flatNode, i int) string {
+	d := i + 1
+	last := d < len(item.LastAt) && item.LastAt[d]
+	if i == item.Depth-1 {
+		if last {
+			return "└ "
+		}
+		return "│ "
+	}
+	if last {
+		return "  "
+	}
+	return "│ "
 }
 
 // drawBranchSuffix writes "  <branch>" after a repo folder's name, in
@@ -556,24 +607,29 @@ func (t *Tree) clampScroll(total, viewH int) {
 	}
 }
 
+// headerRows is how many rows sit above the children list: the Explorer
+// title, the rule under it, and the project root name. HitTest, hover, and
+// Render all count from it so the three cannot disagree.
+const headerRows = 3
+
 // HitTest maps a click within the tree's render rectangle to a Node.
-// Row 0 is the "EXPLORER" header (not clickable). Row 1 is the project
-// root name — clicking it returns t.Root so the caller can set the
-// active folder back to the project root, which is otherwise
-// unreachable once the user has selected any subfolder. Rows 2+ map
-// into the rendered children list.
+// Rows 0 and 1 are the "Explorer" title and its rule (not clickable).
+// Row 2 is the project root name — clicking it returns t.Root so the
+// caller can set the active folder back to the project root, which is
+// otherwise unreachable once the user has selected any subfolder. Rows
+// from headerRows on map into the rendered children list.
 //
-// ok=false means the click landed on the EXPLORER header or empty
-// space below the last entry.
+// ok=false means the click landed on the header or empty space below
+// the last entry.
 func (t *Tree) HitTest(localX, localY int) (*Node, bool) {
 	_ = localX
-	if localY < 1 {
+	if localY < headerRows-1 {
 		return nil, false
 	}
-	if localY == 1 {
+	if localY == headerRows-1 {
 		return t.Root, true
 	}
-	row := localY - 2
+	row := localY - headerRows
 	if row < 0 || row >= len(t.visible) {
 		return nil, false
 	}

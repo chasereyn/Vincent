@@ -58,6 +58,8 @@ type gitPanelItem struct {
 
 	section string    // non-empty: a section header row
 	entry   *gitEntry // non-nil: a clickable file row
+	// A zero gitPanelItem is a blank spacer row: nothing drawn, nothing
+	// clickable. gitPanelRepoItems puts one between repo groups.
 }
 
 // gitPanelRowRect records where a file row was actually drawn, so the next
@@ -92,6 +94,13 @@ func (a *App) gitPanelRepoItems() []gitPanelItem {
 	for _, snap := range a.gitSnap.Repos {
 		if len(snap.Entries) == 0 {
 			continue
+		}
+		if len(items) > 0 {
+			// A blank row between repos. Without it the second repo's
+			// header sits directly under the first repo's last file and
+			// the groups read as one list; Chase asked for the gap on
+			// 2026-09-03 after seeing two repos stacked.
+			items = append(items, gitPanelItem{})
 		}
 		items = append(items, gitPanelItem{repoHeader: gitPanelRepoLabel(snap)})
 		items = appendGitPanelSections(items, snap)
@@ -451,6 +460,9 @@ func (a *App) drawGitPanelList(x, y, w, h int) {
 		if item.section != "" {
 			drawClipped(a.screen, x+1, cy, w-1, item.section, base.Foreground(th.Muted))
 			continue
+		}
+		if item.entry == nil {
+			continue // spacer row between repo groups
 		}
 		a.drawGitPanelRow(x, cy, w, *item.entry)
 		// Record the row where it was actually drawn. Clicks are tested

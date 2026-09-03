@@ -368,9 +368,12 @@ func TestHitTest_ExplorerHeaderMisses(t *testing.T) {
 func TestHitTest_ProjectRootRowReturnsRoot(t *testing.T) {
 	root := &Node{Name: "proj", IsDir: true, Path: "/proj"}
 	tr := &Tree{Root: root, visible: []*Node{{Name: "a"}}}
-	n, ok := tr.HitTest(0, 1)
+	n, ok := tr.HitTest(0, headerRows-1)
 	if !ok || n != root {
-		t.Fatalf("y=1 should map to root, got ok=%v node=%v", ok, n)
+		t.Fatalf("y=%d should map to root, got ok=%v node=%v", headerRows-1, ok, n)
+	}
+	if n, ok := tr.HitTest(0, 1); ok || n != nil {
+		t.Fatalf("the rule row should miss, got ok=%v node=%v", ok, n)
 	}
 }
 
@@ -379,12 +382,12 @@ func TestHitTest_ProjectRootRowReturnsRoot(t *testing.T) {
 func TestHitTest_ValidRow(t *testing.T) {
 	target := &Node{Name: "x"}
 	tr := &Tree{visible: []*Node{target, nil}}
-	n, ok := tr.HitTest(5, 2) // first list row
+	n, ok := tr.HitTest(5, headerRows) // first list row
 	if !ok || n != target {
 		t.Fatalf("expected hit on target, got ok=%v n=%v", ok, n)
 	}
 	// nil entry (blank padding row) should miss.
-	if n, ok := tr.HitTest(5, 3); ok || n != nil {
+	if n, ok := tr.HitTest(5, headerRows+1); ok || n != nil {
 		t.Fatalf("blank row should miss, got ok=%v n=%v", ok, n)
 	}
 }
@@ -446,10 +449,17 @@ func TestRender_ProjectNameAndChevrons(t *testing.T) {
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 
-	// Row 1 should contain the project (root) folder name.
+	// The last header row holds the project (root) folder name; the row
+	// above it is the rule under the Explorer title.
 	rootName := filepath.Base(root)
-	if got := rowText(cells, w, 1); !containsRune(got, rootName) {
-		t.Fatalf("row 1 missing project name %q: got %q", rootName, got)
+	if got := rowText(cells, w, headerRows-1); !containsRune(got, rootName) {
+		t.Fatalf("row %d missing project name %q: got %q", headerRows-1, rootName, got)
+	}
+	if got := rowText(cells, w, 0); !containsRune(got, "Explorer") {
+		t.Fatalf("row 0 missing the Explorer title: got %q", got)
+	}
+	if got := rowText(cells, w, 1); !containsRune(got, "──") {
+		t.Fatalf("row 1 should be the rule under the title: got %q", got)
 	}
 
 	// Find the row containing alpha; verify '⌄' present.
@@ -613,7 +623,7 @@ func TestRender_DirtyRootUsesModifiedColor(t *testing.T) {
 	tr.DirtyFolders = map[string]GitChangeKind{tr.Root.Path: GitChangeModified}
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
-	if !rowHasColor(cells, w, 1, theme.Default().GitModified) {
+	if !rowHasColor(cells, w, headerRows-1, theme.Default().GitModified) {
 		t.Fatal("expected root project row to be drawn in Modified color")
 	}
 }
@@ -665,16 +675,18 @@ func TestRender_IndentGuideAtDepth(t *testing.T) {
 
 	cells, w := renderAndCollect(t, tr, 40, 20)
 
-	// listTop is y+2 (header + root name rows); parent is flat row 0,
-	// child.txt is flat row 1 — see flattenInto's pre-order walk.
-	parentRow := 2
-	childRow := 3
+	// listTop is y+headerRows; parent is flat row 0, child.txt is flat
+	// row 1 — see flattenInto's pre-order walk.
+	parentRow := headerRows
+	childRow := headerRows + 1
 
 	// Column 0 is the leading space every row gets; column 1 is where the
-	// child's single indent-guide unit lives (col 0 = " ", col 1-2 = "│ ").
+	// child's single indent-guide unit lives (col 0 = " ", col 1-2 = the
+	// guide). child.txt is parent's only child, so the guide is the └
+	// that ends the line.
 	guideCell := cells[childRow*w+1]
-	if len(guideCell.Runes) == 0 || guideCell.Runes[0] != '│' {
-		t.Fatalf("expected '│' indent guide at child row col 1, got %v", guideCell.Runes)
+	if len(guideCell.Runes) == 0 || guideCell.Runes[0] != '└' {
+		t.Fatalf("expected '└' indent guide at the last child's col 1, got %v", guideCell.Runes)
 	}
 	fg, _, _ := guideCell.Style.Decompose()
 	if fg != theme.Default().Subtle {
@@ -730,13 +742,14 @@ func TestRender_HoverRowFullWidthBackground(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// alpha is the first child row: local Y 2 (0 = header, 1 = root name).
-	tr.SetHover(2)
+	// alpha is the first child row: local Y headerRows (title, rule,
+	// root name above it).
+	tr.SetHover(headerRows)
 
 	w := 40
 	cells, gotW := renderAndCollect(t, tr, w, 20)
 	hoverWant := theme.Default().RowHover
-	hoverRow := 2 // listTop(2) + flat row 0
+	hoverRow := headerRows // listTop + flat row 0
 	for x := 0; x < gotW; x++ {
 		_, bg, _ := cells[hoverRow*gotW+x].Style.Decompose()
 		if bg != hoverWant {
@@ -744,7 +757,7 @@ func TestRender_HoverRowFullWidthBackground(t *testing.T) {
 		}
 	}
 	// A different row must not pick up the hover fill.
-	otherRow := 3
+	otherRow := headerRows + 1
 	sidebarBG := theme.Default().SidebarBG
 	for x := 0; x < gotW; x++ {
 		_, bg, _ := cells[otherRow*gotW+x].Style.Decompose()
@@ -1614,5 +1627,58 @@ func TestRender_NoBranchWithoutTheMap(t *testing.T) {
 		if strings.Contains(row, "alpha/") && strings.TrimSpace(row) != "› alpha/" {
 			t.Errorf("row = %q, want just the folder name", strings.TrimRight(row, " "))
 		}
+	}
+}
+
+// TestRender_GuideEndsWithCornerOnLastChild pins the guide shape Chase
+// asked for on 2026-09-03: within an expanded folder the middle children
+// carry │ and the last child carries └, and below that last child a
+// deeper row leaves the column blank so the line visibly stops.
+func TestRender_GuideEndsWithCornerOnLastChild(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "p"))
+	mustWrite(t, filepath.Join(root, "p", "a.txt"), "a")
+	mustMkdir(t, filepath.Join(root, "p", "z"))
+	mustWrite(t, filepath.Join(root, "p", "z", "deep.txt"), "d")
+
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	p := findChild(tr.Root, "p")
+	tr.Toggle(p)
+	tr.Toggle(findChild(p, "z"))
+
+	cells, w := renderAndCollect(t, tr, 40, 20)
+	// Folders sort before files, so the rows are: headerRows = p,
+	// +1 = z (middle child of p), +2 = deep.txt (only child of z),
+	// +3 = a.txt (last child of p).
+	at := func(row, col int) rune {
+		c := cells[row*w+col]
+		if len(c.Runes) == 0 {
+			return ' '
+		}
+		return c.Runes[0]
+	}
+	if got := at(headerRows+1, 1); got != '│' {
+		t.Fatalf("z (middle child) guide = %q, want │", got)
+	}
+	if got := at(headerRows+2, 1); got != '│' {
+		t.Fatalf("deep.txt outer guide = %q, want │ while z still has a sibling below", got)
+	}
+	if got := at(headerRows+2, 3); got != '└' {
+		t.Fatalf("deep.txt (only child of z) inner guide = %q, want └", got)
+	}
+	if got := at(headerRows+3, 1); got != '└' {
+		t.Fatalf("a.txt (last child) guide = %q, want └", got)
+	}
+
+	// Collapse z and expand nothing below a.txt: with a.txt now the row
+	// after z, z is still │ and a.txt still └, and no row exists under
+	// the └ to carry a stray line.
+	tr.Toggle(findChild(p, "z"))
+	cells, w = renderAndCollect(t, tr, 40, 20)
+	if got := at(headerRows+2, 1); got != '└' {
+		t.Fatalf("after collapsing z, a.txt guide = %q, want └", got)
 	}
 }

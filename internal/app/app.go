@@ -46,7 +46,7 @@ const (
 	// paths, not code, out of that panel, and at 30 cells a nested Go
 	// package name was clipped before the filename even started. Vincent
 	// gets a monitor of its own, so the editor can afford it.
-	defaultSidebarWidth = 60
+	defaultSidebarWidth = 36
 
 	// startupSidebarPercent caps that default at a fraction of the window
 	// on the first frame. 60 cells of an 80-column terminal leaves 20 for
@@ -62,7 +62,7 @@ const (
 	// The Changes panel starts a little wider than the tree: its rows carry
 	// a filename AND a dimmed parent directory, and the parent is the half
 	// that gets clipped first.
-	defaultGitPanelWidth = 34
+	defaultGitPanelWidth = 40
 	minGitPanelWidth     = 24
 	minWidth             = 50
 	minHeight            = 24

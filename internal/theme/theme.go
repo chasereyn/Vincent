@@ -21,7 +21,7 @@ import "github.com/gdamore/tcell/v2"
 type Theme struct {
 	// --- Surfaces ---
 	BG        tcell.Color // Editor background. See Default's doc comment.
-	SidebarBG tcell.Color // File tree / inactive tab background. Same ground as BG.
+	SidebarBG tcell.Color // File tree / Changes panel background. One shade above BG.
 	StatusBG  tcell.Color // Status bar background. Same ground as BG.
 	StatusFG  tcell.Color // Status bar text, drawn on StatusBG.
 	LineHL    tcell.Color // Active line highlight.
@@ -164,10 +164,16 @@ type Theme struct {
 //
 // Two consequences worth knowing before you "fix" this:
 //
-//   - BG and SidebarBG are intentionally identical. The invariant that
-//     replaced "these must differ" is "Subtle must contrast with BG" —
-//     the splitter is now the only thing dividing the panes, so if it
-//     stops being visible the layout genuinely breaks.
+//   - SidebarBG sits one shade above BG (#090a0d over #030405) since
+//     2026-09-03, when Chase asked for the side panes to be "very
+//     slightly" lighter after seeing 0.6.0. Before that the two were
+//     identical and the splitter alone divided the panes. Subtle must
+//     still contrast with both grounds, because it is the guides and
+//     rules on the sidebar as well as the splitter on the editor.
+//   - StatusFG is lavender (#d2a6ff, Ayu's number colour) rather than the
+//     blue Accent, also from 2026-09-03: the status bar carries the leader
+//     hint, and Chase wanted it to read as a different kind of text from
+//     the accent-blue headers and folder names above it.
 //   - The ground is set explicitly via tcell.NewRGBColor rather than
 //     tcell.ColorDefault, which would inherit whatever the host terminal
 //     is using and would not reliably match Ghostty's #030405.
@@ -183,7 +189,7 @@ func Default() Theme {
 	return Theme{
 		// Surfaces — Ghostty's ground. See the note above.
 		BG:        tcell.NewRGBColor(0x03, 0x04, 0x05),
-		SidebarBG: tcell.NewRGBColor(0x03, 0x04, 0x05),
+		SidebarBG: tcell.NewRGBColor(0x09, 0x0a, 0x0d),
 		StatusBG:  tcell.NewRGBColor(0x03, 0x04, 0x05),
 		// The active line's background, from Chase's Zed settings.
 		LineHL: tcell.NewRGBColor(0x18, 0x1a, 0x1e),
@@ -198,7 +204,7 @@ func Default() Theme {
 		// theme.BG on a solid blue StatusBG; with a near-black StatusBG
 		// that would be nearly black-on-black, so the bar draws accent
 		// text on the ground instead of a coloured slab.
-		StatusFG:    tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		StatusFG:    tcell.NewRGBColor(0xd2, 0xa6, 0xff),
 		Accent:      tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
 		AccentSoft:  tcell.NewRGBColor(0xdf, 0xde, 0xda),
 		Selection:   tcell.NewRGBColor(0x18, 0x31, 0x41),
