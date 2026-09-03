@@ -1,0 +1,38 @@
+# =============================================================================
+# File: .github/workflows/close-prs.yml
+# Copyright: 2026 Chase Reynolds. All rights reserved.
+# =============================================================================
+#
+# Vincent does not take pull requests — see CONTRIBUTING.md. This closes
+# one automatically, with a comment pointing at why, so an opened PR does
+# not sit unread.
+#
+# Runs on pull_request_target deliberately: that event runs with the
+# repo's own write permissions rather than the fork's, which is what lets
+# gh comment and close. It must NEVER check out the PR's own code — doing
+# so would run an outside contributor's code with those write
+# permissions, which is the classic pull_request_target vulnerability.
+# This workflow only calls `gh pr close`, nothing from the PR branch.
+
+name: Close pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close with a note
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
+            "Thanks for the interest, but this project is not accepting pull requests — see CONTRIBUTING.md for why, and feel free to open an issue or fork instead."
+          gh pr close "$PR_NUMBER" --repo "$REPO"
