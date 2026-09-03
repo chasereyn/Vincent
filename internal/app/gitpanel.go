@@ -11,13 +11,16 @@
 //
 // The shape is Zed's, transcribed from a side-by-side screenshot (see
 // CLAUDE.md), with the write-side controls removed — no staging checkboxes,
-// no Stage All, no commit box. What Zed puts at the bottom of the panel is
-// "describe this change and commit it"; Vincent's footer is where phase 2's
-// "describe this change and hand it back to the agent" goes. Same shape,
-// same muscle memory, opposite direction.
+// no Stage All. What Zed puts at the bottom of the panel is "describe this
+// change and commit it"; Vincent's footer is where phase 2's "describe this
+// change and hand it back to the agent" goes. Same shape, same muscle
+// memory, opposite direction.
 //
-// The panel is a navigator, not a stager. Every row is a way to reach a
-// diff; nothing in here mutates a repository.
+// Phase 3b added Zed's commit box back, stacked ABOVE the review block and
+// armed by Esc c (see commitbox.go), and made the repo / branch row open
+// the branch picker (branchpicker.go). Those are the only writes this panel
+// reaches: still no staging, still no partial commits, still no checkbox.
+// The list itself is a navigator — every row is a way to reach a diff.
 
 package app
 
@@ -207,14 +210,37 @@ func (a *App) gitPanelListH() int {
 //
 // Split out of New so it can be tested: New builds a real tcell screen and
 // cannot run under `go test`.
+//
+// A ONE-SHOT, guarded by startupPanelDone — the same shape as
+// clampStartupSidebar, and for the same reason. setRoot used to call this,
+// which meant switching folder re-opened a panel the user had deliberately
+// closed: the default is an answer to "what should a session START like",
+// not to "what should a session look like from now on". setRoot now
+// re-clamps the layout and leaves the panel's state alone; the guard is
+// here so a future caller cannot reintroduce the bug from a different
+// direction.
 func (a *App) applyStartupPanelDefaults() {
+	if a.startupPanelDone {
+		return
+	}
+	a.startupPanelDone = true
 	a.gitPanelShown = a.gitSnap.IsRepo
 	a.reflowPanels()
 }
 
 // menuToggleGitPanel shows or hides the Changes panel.
+//
+// Hiding it also drops the commit box's focus. The box is drawn inside this
+// panel, so leaving it armed under a hidden panel would leave the keyboard
+// pointed at a field nobody can see — every keystroke swallowed, with no
+// caret to explain why. The typed message survives the close (see
+// closeCommitBox), so Esc g twice then Esc c brings it back.
 func (a *App) menuToggleGitPanel() {
 	a.gitPanelShown = !a.gitPanelShown
+	if !a.gitPanelShown {
+		a.closeCommitBox()
+		a.lastCommitBox = commitBoxHit{}
+	}
 	if a.gitPanelShown {
 		a.reflowPanels()
 		// Refresh on open rather than showing whatever the last tick saw.
@@ -235,12 +261,21 @@ func (a *App) gitPanelToggleLabel() string {
 	return "Show changes panel"
 }
 
-// gitPanelClick opens the diff for the row at (x, y), if there is one.
-// Tested against the rects recorded during the last draw.
-func (a *App) gitPanelClick(_, y int) {
-	// The footer's review block is tested first. Its rows sit below the
-	// file list and are recorded by the same draw pass, so a single
-	// lookup order is enough to keep the two from claiming one row.
+// gitPanelClick dispatches a click in the panel: the commit box's field,
+// the branch row, the review block, or a file row — in that order, tested
+// against the rects recorded during the last draw.
+//
+// The order is a formality rather than a tie-break: every one of these
+// records its own rows in the same draw pass, so no two of them can claim
+// the same y. It is written out longhand anyway, because the day the footer
+// grows another row that assumption is the one that breaks.
+func (a *App) gitPanelClick(x, y int) {
+	if a.commitBoxClick(x, y) {
+		return
+	}
+	if a.branchRowClick(y) {
+		return
+	}
 	if a.reviewPanelClick(y) {
 		return
 	}
@@ -250,6 +285,20 @@ func (a *App) gitPanelClick(_, y int) {
 			return
 		}
 	}
+}
+
+// branchRowClick opens the branch picker when the click landed on the
+// footer's "⑂ repo / branch" row, and reports whether it did.
+//
+// Zed makes that row its branch switcher, so Vincent does too — and it is
+// the mouse-first path to Esc b, which the house rule requires: no action
+// may live behind only one of the two.
+func (a *App) branchRowClick(y int) bool {
+	if a.lastBranchRowY < 0 || y != a.lastBranchRowY {
+		return false
+	}
+	a.openBranchPicker()
+	return true
 }
 
 // updateGitPanelHover sets the hovered row from a mouse position, or clears
@@ -404,11 +453,13 @@ func (a *App) drawGitPanelRow(x, cy, w int, e gitEntry) {
 }
 
 // gitPanelFooterH is the height of the whole footer block: the rule and
-// branch row, plus however many rows the review block needs.
+// branch row, the commit box when it is armed, plus however many rows the
+// review block needs.
 //
-// A method rather than a constant because the review block grows with the
-// batch. Both the list height and the footer's origin go through it, so the
-// two can never disagree about where the boundary between them is.
+// A method rather than a constant because both the commit box and the
+// review block grow into it. Both the list height and the footer's origin
+// go through it, so the two can never disagree about where the boundary
+// between them is.
 //
 // The result is clamped so the footer always leaves the header and at least
 // one list row standing. Without that, a long review in a short terminal
@@ -416,7 +467,7 @@ func (a *App) drawGitPanelRow(x, cy, w int, e gitEntry) {
 // Changes list is the reason the panel exists, and the review block must
 // never be able to evict it entirely.
 func (a *App) gitPanelFooterH() int {
-	want := gitPanelBranchRows + a.reviewBlockRows()
+	want := gitPanelBranchRows + a.commitBoxRows() + a.reviewBlockRows()
 	_, _, _, h := a.gitPanelRect()
 	if h <= 0 {
 		return want
@@ -431,27 +482,47 @@ func (a *App) gitPanelFooterH() int {
 	return want
 }
 
-// drawGitPanelFooter draws the rule, the repo / branch row, and the review
-// block beneath it.
+// drawGitPanelFooter draws the rule, the repo / branch row, the commit box
+// when it is armed, and the review block beneath both.
 //
 // The review block is where Zed's commit message box sits. That is the
 // substitution the whole panel was built around: Zed's footer ends in
 // "describe this change and commit it", Vincent's ends in "describe this
 // change and hand it back". Same shape, same muscle memory, opposite
 // direction. See review.go for the block itself.
+//
+// Phase 3b put Zed's commit box back — ABOVE the review block, not instead
+// of it. The two questions are both live in a review session ("hand this
+// back to the agent" and "commit the typo I fixed myself"), and making the
+// footer pick one would mean a keypress that silently hides the other.
+// Stacking costs the Changes list three rows while the box is armed, which
+// gitPanelFooterH already accounts for.
+//
+// The branch row records where it landed so a click on it can open the
+// branch picker. That is the row Zed makes a branch switcher, and it is the
+// mouse-first path to Esc b.
 func (a *App) drawGitPanelFooter(x, y, w int) {
 	th := a.theme
 	base := tcell.StyleDefault.Background(th.SidebarBG)
 	drawRule(a.screen, x, y, w, base.Foreground(th.Subtle))
 
+	a.lastBranchRowY = -1
 	if a.gitSnap.IsRepo {
 		label := a.gitSnap.RepoName
 		if a.gitSnap.Branch != "" {
 			label += " / " + a.gitSnap.Branch
 		}
 		drawClipped(a.screen, x+1, y+1, w-1, "⑂ "+label, base.Foreground(th.Accent))
+		a.lastBranchRowY = y + 1
 	}
-	a.drawGitPanelReview(x, y+gitPanelBranchRows, w, a.gitPanelFooterH()-gitPanelBranchRows)
+
+	// The commit box takes its rows off the top of what is left, and tells
+	// us how many it actually used — which is fewer than it wants in a
+	// terminal too short for the whole footer. The review block starts
+	// wherever the box stopped, so neither has to know the other's height.
+	rest := a.gitPanelFooterH() - gitPanelBranchRows
+	used := a.drawCommitBox(x, y+gitPanelBranchRows, w, rest)
+	a.drawGitPanelReview(x, y+gitPanelBranchRows+used, w, rest-used)
 }
 
 // -----------------------------------------------------------------------------

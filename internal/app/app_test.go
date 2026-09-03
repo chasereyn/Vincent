@@ -59,6 +59,9 @@ func newTestApp(t *testing.T, root string) *App {
 		// test would assert against a panel that never drew.
 		gitPanelWidth: defaultGitPanelWidth,
 		gitPanelHover: -1,
+		// Mirror the constructors: -1 is "no branch row on screen", so a
+		// click test cannot match row 0 before a footer draw stamped it.
+		lastBranchRowY: -1,
 		// The real default (config.Defaults().TabBar) is false, but this
 		// fixture predates the toggle and most existing tab-bar tests
 		// assume the full strip renders — true here keeps them

@@ -57,9 +57,24 @@ diff, `Esc r` on a line to write a note, `Esc Enter` to drop the batch
 into the agent's prompt. None of the 2026-09-02 work has been seen on a
 real terminal yet — it was built by four agents against simulation-screen
 tests and merged by hand. **The first thing to do next session is run it
-and look.** Then phases 3b (git writes, root switcher), 6b (find/replace,
-new file), 7 (markdown), 8, 9.
+and look.** Then phases 6b (find/replace, new file), 7 (markdown), 8, 9.
+Phase 3b (git writes) landed on 2026-09-03 and is also unseen.
 
+- **Phase 3b, git writes.** The three blunt writes, off the Changes panel
+  and off three leader keys. `Esc c` arms a commit message box in the panel
+  footer — stacked ABOVE the review block, not instead of it — and Enter
+  runs `git add -A && git commit -m`. `Esc P` pushes on a worker goroutine
+  (`gitPushEvent`), creating the upstream with `-u origin <branch>` only
+  when the branch has none. `Esc b`, or a click on the panel's repo/branch
+  row, opens a branch picker shaped like the root switcher; Enter checks
+  out. Every shell-out lives in `app/gitwrite.go` behind an injectable
+  `gitRunner`, so no test touches a real remote. Three refusals are
+  deliberate and gate the gesture rather than the command: not a repo,
+  nothing changed, and — the one that exists to prevent losing work rather
+  than to prevent an error — any dirty text tab, because `git add -A` would
+  stage the version on disk instead of the one on screen. A locked index
+  gets its own sentence and NO retry loop; every other failure gets one
+  line on screen and the full stderr in `herdr.log`.
 - **Phase 3, the review loop.** `internal/review` holds the note model,
   the wire format, and the herdr client. A diff tab grows overlay rows for
   the inline composer and for saved-note markers (`editor/diffoverlay.go`).
@@ -135,6 +150,9 @@ internal/app/review.go     1130  Composer, saved-note markers, footer batch, sen
 internal/app/gitpanel.go    516  The Changes panel: layout, rows, clicks, review footer
 internal/app/finder.go      474  Fuzzy file-finder modal
 internal/app/find.go        297  In-file find bar
+internal/app/branchpicker.go 607 Esc b: list branches, check one out
+internal/app/gitwrite.go    354  THE three git writes + the injectable runner
+internal/app/commitbox.go   359  Esc c: the footer commit box and its commit
 internal/app/gitentries.go  258  THE git status parse — tree and panel both
 internal/app/diffview.go    250  git diff shell-outs, diff tabs, live refresh
 internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
@@ -393,7 +411,7 @@ starting its phase.
 | 1 | Inline (Zed-style) diff viewer | **done** |
 | 2 | Zed-shaped read-only git panel | **done** |
 | 3 | Review notes + herdr/clipboard handoff, legend in the batch | **done**, unseen on a real terminal |
-| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | next |
+| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | **done**, unseen on a real terminal |
 | 4 | Render loop: skip no-op motion frames, drain events, git tick off the UI thread | **done** |
 | 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | **done** |
 | 6a | Editor safety: bracketed paste, conflict model | **done** |

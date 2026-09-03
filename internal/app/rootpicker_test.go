@@ -979,3 +979,70 @@ func TestCtxChangeRoot_OpensPicker(t *testing.T) {
 		t.Fatal("it should open in recents mode")
 	}
 }
+
+// TestSetRoot_KeepsThePanelsCurrentVisibility is loose end A of phase 3b.
+//
+// setRoot used to call applyStartupPanelDefaults, so switching folder
+// re-opened the Changes panel even when the user had just closed it with
+// Esc g. "Open the panel in a repo" is an answer about how a SESSION
+// starts; re-applying it on every switch made it an answer about how the
+// panel behaves forever, and quietly undid a deliberate keypress.
+func TestSetRoot_KeepsThePanelsCurrentVisibility(t *testing.T) {
+	requireGit(t)
+	from := initRepo(t)
+	to := initRepo(t)
+	writeFileT(t, filepath.Join(to, "a.txt"), "x\n")
+
+	a := newTestApp(t, from)
+	a.refreshGitStatus()
+	a.applyStartupPanelDefaults()
+	if !a.gitPanelShown {
+		t.Fatal("fixture: a repo should start with the panel open")
+	}
+
+	// The user closes it on purpose, then changes folder.
+	a.menuToggleGitPanel()
+	if a.gitPanelShown {
+		t.Fatal("fixture: Esc g should have closed the panel")
+	}
+	if !a.setRoot(to) {
+		t.Fatalf("setRoot: %q", a.statusMsg)
+	}
+	if a.gitPanelShown {
+		t.Error("switching root re-opened a panel the user had closed")
+	}
+	// And the layout is still consistent, which is what the call it
+	// replaced was also doing.
+	_, _, ew, _ := a.editorRect()
+	if ew+a.sidebarW()+a.gitPanelW() != a.width {
+		t.Errorf("panes total %d, want the full width %d", ew+a.sidebarW()+a.gitPanelW(), a.width)
+	}
+
+	// The other direction: a panel left OPEN stays open across a switch.
+	a.menuToggleGitPanel()
+	if !a.setRoot(from) {
+		t.Fatalf("setRoot back: %q", a.statusMsg)
+	}
+	if !a.gitPanelShown {
+		t.Error("switching root closed a panel the user had open")
+	}
+}
+
+// TestApplyStartupPanelDefaults_IsAOneShot guards the same rule from the
+// other side. The default is allowed to decide the panel's state once; a
+// second call — from a future root switch, or a re-init — must not.
+func TestApplyStartupPanelDefaults_IsAOneShot(t *testing.T) {
+	requireGit(t)
+	a := newTestApp(t, initRepo(t))
+	a.refreshGitStatus()
+
+	a.applyStartupPanelDefaults()
+	if !a.gitPanelShown {
+		t.Fatal("first call should open the panel in a repo")
+	}
+	a.gitPanelShown = false
+	a.applyStartupPanelDefaults()
+	if a.gitPanelShown {
+		t.Error("applyStartupPanelDefaults ran twice and re-opened the panel")
+	}
+}

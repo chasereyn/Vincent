@@ -307,7 +307,20 @@ type App struct {
 	// the stall it exists to avoid worse. Written only on the main
 	// goroutine (startGitPoll and applyGitPoll), so it needs no lock — see
 	// gitpoll.go.
-	gitPollBusy bool
+	//
+	// gitPollStartedAt is when the in-flight poll launched, and it is what
+	// keeps the flag from being a permanent off switch: a worker that dies,
+	// or a PostEvent that fails, would otherwise leave gitPollBusy true for
+	// the rest of the session and silently stop the ten-second refresh. See
+	// startGitPoll.
+	gitPollBusy      bool
+	gitPollStartedAt time.Time
+
+	// startupPanelDone records that applyStartupPanelDefaults has run. The
+	// "open the Changes panel in a repo" default is a one-shot for the same
+	// reason clampStartupSidebar is: re-applying it on a root switch would
+	// quietly re-open a panel the user had deliberately closed.
+	startupPanelDone bool
 
 	// gitBranch is the current branch name for the project root (or a
 	// short commit SHA when HEAD is detached). Empty when the root isn't
@@ -382,6 +395,42 @@ type App struct {
 	pickerText    string
 	pickerHover   int
 
+	// Phase 3b, the git writes. gitWriteRunner is the injectable git
+	// runner: nil in production (gitWriter() then hands back runGitWrite),
+	// a fake in tests so no test ever touches a real remote. See
+	// gitwrite.go.
+	//
+	// The commit box is the Esc c message field in the Changes panel
+	// footer, stacked above the review block. lastCommitBox is the
+	// draw-time geometry a click is tested against, and commitCaretX/Y is
+	// where the caret landed — replayed at the end of draw() because the
+	// editor pane paints after the panel and would otherwise move the
+	// terminal cursor back to the buffer. See commitbox.go.
+	//
+	// pushing is true while a `git push` worker is in flight, which is what
+	// makes a second Esc P refuse instead of forking a second push.
+	//
+	// branchPicker is the Esc b switcher, shaped like the root picker. See
+	// branchpicker.go.
+	gitWriteRunner gitRunner
+
+	commitOpen    bool
+	commitValue   []rune
+	commitCursor  int
+	commitScroll  int
+	commitCaretX  int
+	commitCaretY  int
+	lastCommitBox commitBoxHit
+
+	// lastBranchRowY is the screen row the panel footer's "⑂ repo /
+	// branch" line landed on, or -1 when it was not drawn. Clicking it
+	// opens the branch picker.
+	lastBranchRowY int
+
+	pushing bool
+
+	branchPicker branchPickerState
+
 	// signalStop is the channel startSignalWatch registered for Ctrl+C and
 	// SIGTERM. Held so a normal exit can unregister it. See shutdown.go.
 	signalStop chan os.Signal
@@ -450,6 +499,10 @@ func New(rootDir string) (*App, error) {
 		sidebarWidth:  defaultSidebarWidth,
 		gitPanelWidth: defaultGitPanelWidth,
 		gitPanelHover: -1,
+		// -1 is "no branch row on screen", the same sentinel gitPanelHover
+		// uses. The footer draw stamps the real row; until it has, a click
+		// must not be able to match row 0.
+		lastBranchRowY: -1,
 		// -1 is "the composer is writing a NEW note". Zero would read as
 		// "editing comment 0", which matters the moment any code path
 		// consults it without checking composerOpen first.
@@ -520,6 +573,10 @@ func NewSingleFile(filePath string) (*App, error) {
 		sidebarWidth:  defaultSidebarWidth,
 		gitPanelWidth: defaultGitPanelWidth,
 		gitPanelHover: -1,
+		// -1 is "no branch row on screen", the same sentinel gitPanelHover
+		// uses. The footer draw stamps the real row; until it has, a click
+		// must not be able to match row 0.
+		lastBranchRowY: -1,
 		// -1 is "the composer is writing a NEW note". Zero would read as
 		// "editing comment 0", which matters the moment any code path
 		// consults it without checking composerOpen first.
@@ -746,6 +803,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 		a.quit = true
 	case *treeRefreshEvent:
 		a.refreshTreeNow()
+	case *gitPushEvent:
+		// A background push came back. Same contract as gitPollEvent: the
+		// worker shelled out, this is where the result becomes UI state.
+		// See gitwrite.go.
+		a.applyGitPush(e)
 	case *gitPollEvent:
 		// A background refresh came back. Everything in it was read on a
 		// worker goroutine; this is where it becomes UI state. See
@@ -1055,8 +1117,22 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleRootPickerKey(ev)
 		return
 	}
+	if a.branchPicker.open {
+		a.handleBranchPickerKey(ev)
+		return
+	}
 	if a.pickerOpen {
 		a.handlePickerKey(ev)
+		return
+	}
+	// The commit box is not a modal — it lives in the Changes panel's
+	// footer — but while it is armed it owns the keyboard, Esc included,
+	// where it means "close the box". Routed ahead of the review composer
+	// as well as ahead of the leader table: Esc c pressed over a
+	// half-written note has to be able to take the keyboard and hand it
+	// back, and the note's state survives untouched either way.
+	if a.commitOpen {
+		a.handleCommitKey(ev)
 		return
 	}
 	// The review composer is not a modal — it lives inline in the diff —
@@ -1272,6 +1348,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.rootPicker.open {
 		a.handleRootPickerMouse(x, y, btn)
+		return
+	}
+	if a.branchPicker.open {
+		a.handleBranchPickerMouse(x, y, btn)
 		return
 	}
 	if a.pickerOpen {
@@ -2388,6 +2468,13 @@ func (a *App) draw() {
 		a.drawEmptyEditor()
 	}
 
+	// The commit box's caret, replayed after the editor pane painted. The
+	// panel drew the box itself, but tab.Render calls ShowCursor or
+	// HideCursor for the buffer's own caret and whoever calls last wins.
+	// Before the find bar, so an open find bar still owns the cursor.
+	if a.commitOpen {
+		a.showCommitCaret()
+	}
 	if a.findOpen {
 		a.drawFindBar()
 	}
@@ -2416,6 +2503,9 @@ func (a *App) draw() {
 	}
 	if a.rootPicker.open {
 		a.drawRootPicker()
+	}
+	if a.branchPicker.open {
+		a.drawBranchPicker()
 	}
 	if a.pickerOpen {
 		a.drawReviewPicker()

@@ -12,8 +12,9 @@
 // bindings — Esc is the only modifier we trust over SSH.
 //
 // Reworked 2026-09-02 (Chase Reynolds): f is the file panel, / is find,
-// U is redo, a is select-all. r, Enter, y, o, b, c, P, and t are reserved
-// for the review composer, git writes, and the tab bar toggle.
+// U is redo, a is select-all. r, Enter, y, o, and t belong to the review
+// composer, the root switcher, and the tab bar toggle; c, P and b were
+// reserved for the git writes and landed in phase 3b.
 //
 // Reworked again 2026-09-02, after the owner's first real session: the ≡
 // action menu is gone (see cheatsheet.go) and with it the Esc m binding
@@ -32,6 +33,7 @@ import "github.com/gdamore/tcell/v2"
 // grouping in one place rather than duplicated in the painter.
 const (
 	leaderGroupReview  = "Review"
+	leaderGroupGit     = "Git"
 	leaderGroupSearch  = "Search"
 	leaderGroupView    = "View"
 	leaderGroupEdit    = "Edit"
@@ -64,9 +66,12 @@ type leaderBinding struct {
 // familiar editor gestures where they make sense.
 //
 // Intentionally not bound:
-//   - c / x / v (clipboard) — the host terminal's own Cmd+C/Cmd+V already
+//   - x / v (clipboard) — the host terminal's own Cmd+C/Cmd+V already
 //     covers that path, a mouse selection is what you copy from, and
 //     Backspace deletes a selection. A third channel just adds confusion.
+//     'c' was on that list until phase 3b spent it on commit, which is the
+//     same argument from the other side: the key is free precisely because
+//     copy does not need it.
 //   - revert / toggle line comment — destructive or fiddly enough that the
 //     editor's right-click menu is a better gate than a one-key reflex.
 func leaderBindings() []leaderBinding {
@@ -80,6 +85,12 @@ func leaderBindings() []leaderBinding {
 		{'r', "note", leaderGroupReview, (*App).openReviewComposer},
 		{'y', "copy review", leaderGroupReview, (*App).copyReview},
 		{'g', "changes", leaderGroupReview, (*App).menuToggleGitPanel},
+		// Git — the three blunt writes, phase 3b. 'P' is capitalised on
+		// purpose: 'p' is the file finder, and pushing to a remote is not
+		// a key anyone should hit reaching for it.
+		{'c', "commit", leaderGroupGit, (*App).openCommitBox},
+		{'P', "push", leaderGroupGit, (*App).pushBranch},
+		{'b', "branch", leaderGroupGit, (*App).openBranchPicker},
 		// Search
 		{'p', "find file", leaderGroupSearch, (*App).openFinder},
 		{'/', "find", leaderGroupSearch, (*App).openFind},
