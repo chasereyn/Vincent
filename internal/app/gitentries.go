@@ -57,6 +57,12 @@ type gitEntry struct {
 	Deleted   bool
 	Staged    bool
 
+	// Repo is the absolute root of the repository that owns this entry.
+	// Carried on the entry rather than looked up from the snapshot because
+	// a merged multi-repo snapshot has many, and DirtyFiles has to resolve
+	// a rename's old path against the RIGHT one.
+	Repo string
+
 	// Orig is the previous path of a rename or copy, relative to the repo
 	// root. Empty for everything else.
 	Orig string
@@ -72,6 +78,16 @@ type gitSnapshot struct {
 	RepoName string
 	Branch   string
 	Entries  []gitEntry
+
+	// Repos holds one snapshot per repository when the root is a FOLDER OF
+	// REPOS rather than a repo itself (phase 8a). It is empty in the
+	// single-repo case, and every reader that predates phase 8a still gets
+	// the answer it always got: IsRepo, Entries, Tracked, Untracked and
+	// DirtyFiles are all merged across the members. What the aggregate
+	// does NOT have is a Branch or a meaningful RepoName — a folder has
+	// neither — so the footer and the writes ask activeRepoSnapshot
+	// instead. See multirepo.go.
+	Repos []gitSnapshot
 }
 
 // Tracked returns the entries git already knows about, in path order.
@@ -103,8 +119,16 @@ func (s gitSnapshot) filter(untracked bool) []gitEntry {
 func (s gitSnapshot) DirtyFiles() map[string]filetree.GitChangeKind {
 	out := make(map[string]filetree.GitChangeKind, len(s.Entries))
 	for _, e := range s.Entries {
-		if e.Orig != "" && s.Root != "" {
-			out[filepath.Join(s.Root, filepath.FromSlash(e.Orig))] = filetree.GitChangeDeleted
+		if e.Orig != "" {
+			// The rename's old path is relative to the repo that reported
+			// it, which in a merged snapshot is not s.Root.
+			base := e.Repo
+			if base == "" {
+				base = s.Root
+			}
+			if base != "" {
+				out[filepath.Join(base, filepath.FromSlash(e.Orig))] = filetree.GitChangeDeleted
+			}
 		}
 		out[e.Abs] = e.Kind
 	}
@@ -119,10 +143,25 @@ func (s gitSnapshot) DirtyFiles() map[string]filetree.GitChangeKind {
 // of them mean "render nothing git-specific" and none of them are worth
 // interrupting a review over.
 func loadGitSnapshot(rootDir string) gitSnapshot {
-	if rootDir == "" {
+	return loadSnapshotAs(rootDir, "")
+}
+
+// loadSnapshotAs is loadGitSnapshot with control over the path the
+// snapshot is REPORTED under.
+//
+// as == "" means "whatever git says", which is `rev-parse
+// --show-toplevel` and is what the single-repo path has always used. The
+// multi-repo registry passes the path it discovered the repo by instead,
+// because git resolves symlinks and the registry does not: on macOS a repo
+// under /var/folders reports itself as /private/var/folders, and a
+// snapshot filed under that path can never be matched to the a.repos entry
+// or to a file-tree node. Reporting it under the path the caller already
+// knows keeps every key in one namespace.
+func loadSnapshotAs(dir, as string) gitSnapshot {
+	if dir == "" {
 		return gitSnapshot{}
 	}
-	topBytes, err := gitCmd(rootDir, "rev-parse", "--show-toplevel").Output()
+	topBytes, err := gitCmd(dir, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return gitSnapshot{}
 	}
@@ -130,22 +169,26 @@ func loadGitSnapshot(rootDir string) gitSnapshot {
 	if toplevel == "" {
 		return gitSnapshot{}
 	}
+	root := toplevel
+	if as != "" {
+		root = filepath.Clean(as)
+	}
 
 	snap := gitSnapshot{
 		IsRepo:   true,
-		Root:     toplevel,
-		RepoName: filepath.Base(toplevel),
-		Branch:   loadGitBranch(rootDir),
+		Root:     root,
+		RepoName: filepath.Base(root),
+		Branch:   loadGitBranch(dir),
 		Entries:  []gitEntry{},
 	}
 
-	out, err := gitCmd(rootDir, "status", "--porcelain", "-z", "--untracked-files=all").Output()
+	out, err := gitCmd(dir, "status", "--porcelain", "-z", "--untracked-files=all").Output()
 	if err != nil {
 		// We are in a repo but could not read status. Report the repo facts
 		// so the panel still shows the branch, and leave the list empty.
 		return snap
 	}
-	snap.Entries = parsePorcelainZ(string(out), toplevel)
+	snap.Entries = parsePorcelainZ(string(out), root)
 	return snap
 }
 
@@ -201,6 +244,7 @@ func parsePorcelainZ(out, toplevel string) []gitEntry {
 			Untracked: index == '?' || worktree == '?',
 			Deleted:   index == 'D' || worktree == 'D',
 			Staged:    index != ' ' && index != '?',
+			Repo:      toplevel,
 			Orig:      orig,
 		})
 	}

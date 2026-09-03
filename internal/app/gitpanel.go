@@ -50,6 +50,12 @@ const (
 // scrolling and hit-testing each handle a single sequence rather than
 // walking two sections and reasoning about the boundary.
 type gitPanelItem struct {
+	// repoHeader is non-empty on a "⑂ name / branch" row, which groups the
+	// rows below it by repository. Drawn only when the root holds more than
+	// one repo — with a single repo the panel has exactly the shape it had
+	// before phase 8a, and a header restating the footer would be noise.
+	repoHeader string
+
 	section string    // non-empty: a section header row
 	entry   *gitEntry // non-nil: a clickable file row
 }
@@ -64,8 +70,53 @@ type gitPanelRowRect struct {
 }
 
 // gitPanelItems flattens the current snapshot into rendered rows.
+//
+// Two shapes, one list. With a single repository it is Tracked then
+// Untracked, exactly as it always was. With a folder of repos each repo
+// that HAS changes contributes a "⑂ name / branch" header followed by its
+// own two sections; a clean repo is not listed at all, because a review
+// panel listing five repos with nothing in them buries the one with work
+// in it.
 func (a *App) gitPanelItems() []gitPanelItem {
+	if len(a.gitSnap.Repos) > 1 {
+		return a.gitPanelRepoItems()
+	}
 	items := []gitPanelItem{}
+	items = appendGitPanelSections(items, a.gitSnap)
+	return items
+}
+
+// gitPanelRepoItems is gitPanelItems' multi-repo shape.
+func (a *App) gitPanelRepoItems() []gitPanelItem {
+	items := []gitPanelItem{}
+	for _, snap := range a.gitSnap.Repos {
+		if len(snap.Entries) == 0 {
+			continue
+		}
+		items = append(items, gitPanelItem{repoHeader: gitPanelRepoLabel(snap)})
+		items = appendGitPanelSections(items, snap)
+	}
+	return items
+}
+
+// gitPanelRepoLabel renders one repo's header text. Same "⑂ name / branch"
+// form as the footer's branch row, so the two read as the same fact about
+// the same thing.
+func gitPanelRepoLabel(snap gitSnapshot) string {
+	label := "⑂ " + snap.RepoName
+	if snap.Branch != "" {
+		label += " / " + snap.Branch
+	}
+	return label
+}
+
+// appendGitPanelSections appends one snapshot's Tracked and Untracked
+// sections to items. Shared by both shapes so a single repo's rows are
+// built by exactly the same code whether or not a header sits above them.
+//
+// Tracked() and Untracked() each return a fresh slice, so taking the
+// address of an element is safe — the backing array outlives the loop.
+func appendGitPanelSections(items []gitPanelItem, snap gitSnapshot) []gitPanelItem {
 	add := func(label string, entries []gitEntry) {
 		if len(entries) == 0 {
 			return
@@ -75,10 +126,8 @@ func (a *App) gitPanelItems() []gitPanelItem {
 			items = append(items, gitPanelItem{entry: &entries[i]})
 		}
 	}
-	tracked := a.gitSnap.Tracked()
-	untracked := a.gitSnap.Untracked()
-	add("Tracked", tracked)
-	add("Untracked", untracked)
+	add("Tracked", snap.Tracked())
+	add("Untracked", snap.Untracked())
 	return items
 }
 
@@ -281,6 +330,11 @@ func (a *App) gitPanelClick(x, y int) {
 	}
 	for _, r := range a.lastGitPanelRows {
 		if r.y == y {
+			// Remember which repo the row belonged to BEFORE opening the
+			// diff. It is activeRepo's third rule, and it is what keeps
+			// the footer and the writes pointed at the repo the reviewer
+			// last chose even after they close the tab it opened.
+			a.setGitPanelRepo(r.entry.Repo)
 			a.openDiff(r.entry.Abs)
 			return
 		}
@@ -390,6 +444,10 @@ func (a *App) drawGitPanelList(x, y, w, h int) {
 		cy := y + row
 		item := items[idx]
 
+		if item.repoHeader != "" {
+			drawClipped(a.screen, x+1, cy, w-1, item.repoHeader, base.Foreground(th.Accent))
+			continue
+		}
 		if item.section != "" {
 			drawClipped(a.screen, x+1, cy, w-1, item.section, base.Foreground(th.Muted))
 			continue
@@ -508,9 +566,14 @@ func (a *App) drawGitPanelFooter(x, y, w int) {
 
 	a.lastBranchRowY = -1
 	if a.gitSnap.IsRepo {
-		label := a.gitSnap.RepoName
-		if a.gitSnap.Branch != "" {
-			label += " / " + a.gitSnap.Branch
+		// The ACTIVE repo, not the root: in a folder-of-repos root this row
+		// is the answer to "where would a commit go", and the three writes
+		// resolve that the same way (activeRepo). A row naming the folder
+		// while the commit lands in one repo inside it is the specific
+		// wrongness this replaced.
+		label := a.activeRepoName()
+		if branch := a.branchLabel(); branch != "" {
+			label += " / " + branch
 		}
 		drawClipped(a.screen, x+1, y+1, w-1, "⑂ "+label, base.Foreground(th.Accent))
 		a.lastBranchRowY = y + 1

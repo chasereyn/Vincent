@@ -661,6 +661,12 @@ func (a *App) setRoot(path string) bool {
 	a.gitPanelHover = -1
 	a.gitPanelScroll = 0
 	a.lastGitPanelRows = nil
+	// gitPanelRepo names a repo under the OLD root, and it is one of the
+	// inputs to activeRepo — leaving it set would aim the next commit at a
+	// folder the user has just navigated away from.
+	a.gitPanelRepo = ""
+	// refreshGitStatus rebuilds the repo registry before it reads status, so
+	// the new root's repos are known from this frame on.
 	a.refreshGitStatus()
 	// Re-clamp the layout, but do NOT re-apply the startup panel default.
 	// "Open the Changes panel in a repo" is an answer about how a session

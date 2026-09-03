@@ -134,6 +134,18 @@ type Comment struct {
 	// the agent can paste the path straight into a tool call.
 	File string
 
+	// Repo is the absolute root of the repository File is relative TO, and
+	// it is never rendered into the batch — the agent receiving the batch
+	// already has that repo as its working directory.
+	//
+	// It exists because File alone stopped being unique in phase 8a: with a
+	// folder-of-repos root two repos can both hold "src/main.go", and
+	// without this the app could not tell which one a note belonged to when
+	// reopening it or when deciding whether it had gone stale. Empty means
+	// "the one repo", which is how every single-repo note is recorded and
+	// why the wire format is unchanged.
+	Repo string
+
 	Side  Side
 	Start int // 1-based line on Side.
 	End   int // == Start for a single-line comment.
@@ -223,6 +235,12 @@ func (b Batch) Render() string {
 	items := make([]Comment, len(b.Comments))
 	copy(items, b.Comments)
 	sort.SliceStable(items, func(i, j int) bool {
+		// Repo first so a cross-repo batch does not interleave two files
+		// that happen to share a relative path. Empty in the single-repo
+		// case, where this leaves the order exactly as it was.
+		if items[i].Repo != items[j].Repo {
+			return items[i].Repo < items[j].Repo
+		}
 		if items[i].File != items[j].File {
 			return items[i].File < items[j].File
 		}

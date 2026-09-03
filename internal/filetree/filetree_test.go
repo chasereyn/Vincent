@@ -16,6 +16,7 @@ package filetree
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -1560,4 +1561,58 @@ func TestCollapseAll_ActiveFolderCases(t *testing.T) {
 func TestCollapseAll_NilRootIsNoop(t *testing.T) {
 	tr := &Tree{HoverY: -1}
 	tr.CollapseAll()
+}
+
+// TestRender_RepoFolderShowsItsBranch pins phase 8a's tree decoration: a
+// folder listed in RepoBranches draws its branch dimmed after the name, so
+// a flat folder of company repos says which checkout each one is on without
+// clicking into it.
+func TestRender_RepoFolderShowsItsBranch(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "alpha"))
+	mustMkdir(t, filepath.Join(root, "notes"))
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tr.RepoBranches = map[string]string{filepath.Join(root, "alpha"): "main"}
+
+	cells, w := renderAndCollect(t, tr, 40, 10)
+
+	var alpha, notes string
+	for y := 0; y < 10; y++ {
+		row := rowText(cells, w, y)
+		if strings.Contains(row, "alpha/") {
+			alpha = row
+		}
+		if strings.Contains(row, "notes/") {
+			notes = row
+		}
+	}
+	if !strings.Contains(alpha, "alpha/  main") {
+		t.Errorf("repo folder row = %q, want the branch after the name", strings.TrimRight(alpha, " "))
+	}
+	if strings.Contains(notes, "main") {
+		t.Errorf("a plain folder was decorated with a branch: %q", strings.TrimRight(notes, " "))
+	}
+}
+
+// TestRender_NoBranchWithoutTheMap is the single-repo case: with no branch
+// map (which is what App stamps when the root is itself the only repo) the
+// rows are exactly what they always were.
+func TestRender_NoBranchWithoutTheMap(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "alpha"))
+	tr, err := New(root)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	cells, w := renderAndCollect(t, tr, 40, 10)
+	for y := 0; y < 10; y++ {
+		row := rowText(cells, w, y)
+		if strings.Contains(row, "alpha/") && strings.TrimSpace(row) != "› alpha/" {
+			t.Errorf("row = %q, want just the folder name", strings.TrimRight(row, " "))
+		}
+	}
 }

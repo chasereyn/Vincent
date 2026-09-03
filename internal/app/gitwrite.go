@@ -316,7 +316,10 @@ func (a *App) pushBranch() {
 	a.flash("Pushing…")
 
 	run := a.gitWriter()
-	dir := a.rootDir
+	// The active repo, resolved HERE on the UI thread and captured by
+	// value. The worker must not read a.repos or a.tabs, and the answer
+	// must not change while the push is in flight.
+	dir := a.activeRepo()
 	scr := a.screen
 	go func() {
 		branch, stderr, err := gitCurrentBranch(run, dir)

@@ -70,7 +70,13 @@ type frameKey struct {
 	gitPanelHover  int
 	gitPanelScroll int
 	gitEntryCount  int
-	gitBranch      string
+
+	// gitBranch is the ACTIVE repo's branch (App.branchLabel), not the
+	// root's. In a folder-of-repos root it changes when the user switches
+	// to a tab in another repo — which is not a git event, so nothing else
+	// in this key would notice, and the status bar and the panel footer
+	// would both keep naming the branch they were showing before.
+	gitBranch string
 
 	cheatsheetOpen bool
 
@@ -169,7 +175,7 @@ func (a *App) frameKey() frameKey {
 		gitPanelHover:     a.gitPanelHover,
 		gitPanelScroll:    a.gitPanelScroll,
 		gitEntryCount:     len(a.gitSnap.Entries),
-		gitBranch:         a.gitBranch,
+		gitBranch:         a.branchLabel(),
 		cheatsheetOpen:    a.cheatsheetOpen,
 		contextOpen:       a.contextOpen,
 		contextHover:      a.contextHover,

@@ -55,6 +55,7 @@ import (
 	"github.com/chasereyn/vincent/internal/clipboard"
 	"github.com/chasereyn/vincent/internal/diff"
 	"github.com/chasereyn/vincent/internal/editor"
+	"github.com/chasereyn/vincent/internal/repos"
 	"github.com/chasereyn/vincent/internal/review"
 )
 
@@ -251,11 +252,46 @@ func anchorRowFor(rows []diff.Row, c review.Comment) int {
 }
 
 // reviewPathFor renders an absolute path the way a comment records it:
-// repo-relative, forward slashes on every platform. The agent reading the
-// batch pastes these into tool calls, and a Windows-separated path in a
-// prompt is a path the agent has to guess about.
+// relative to the repository that OWNS it, forward slashes on every
+// platform. The agent reading the batch pastes these into tool calls, and a
+// Windows-separated path in a prompt is a path the agent has to guess
+// about.
+//
+// The repo, not the root. Phase 8a: with a folder-of-repos root a
+// root-relative path reads "alpha/src/main.go", and the agent that wrote
+// that code has alpha — not the folder above it — as its working
+// directory, so every path in the batch would be one segment wrong. When
+// the root IS the repo the two are the same string and nothing changes.
 func (a *App) reviewPathFor(path string) string {
+	if rel := a.reviewRelFor(path); rel != "" {
+		return rel
+	}
 	return filepath.ToSlash(a.relativePathFor(path))
+}
+
+// reviewRelFor is the repo-relative form of path, or "" when the
+// root-relative form is already the right answer.
+//
+// "" is returned in single-repo mode deliberately rather than computing
+// the same string a second way: a root that is itself a repo, and a root
+// that sits INSIDE a repo, both already record notes the way the receiving
+// agent expects, and re-deriving it would be a second code path with no
+// different answer.
+func (a *App) reviewRelFor(path string) string {
+	if a.singleRepoMode() {
+		return ""
+	}
+	return repos.Rel(a.repos, absolutePathFor(path))
+}
+
+// reviewRepoFor is the repository a note's file belongs to, recorded on
+// the comment so it can be resolved back to an absolute path later. Empty
+// in single-repo mode, where a.rootDir is the only answer there is.
+func (a *App) reviewRepoFor(path string) string {
+	if a.singleRepoMode() {
+		return ""
+	}
+	return repos.Owner(a.repos, absolutePathFor(path))
 }
 
 // -----------------------------------------------------------------------------
@@ -296,6 +332,7 @@ func (a *App) openReviewComposer() {
 	a.composerTab = tab
 	a.composerRow = hi
 	a.composerFile = a.reviewPathFor(tab.Path)
+	a.composerRepo = a.reviewRepoFor(tab.Path)
 	a.composerSide = side
 	a.composerStart = start
 	a.composerEnd = end
@@ -334,6 +371,7 @@ func (a *App) openReviewCommentForEdit(idx int) {
 	a.composerTab = tab
 	a.composerRow = row
 	a.composerFile = c.File
+	a.composerRepo = c.Repo
 	a.composerSide = c.Side
 	a.composerStart = c.Start
 	a.composerEnd = c.End
@@ -396,6 +434,7 @@ func (a *App) saveReviewComment() {
 	}
 	c := review.Comment{
 		File:    a.composerFile,
+		Repo:    a.composerRepo,
 		Side:    a.composerSide,
 		Start:   a.composerStart,
 		End:     a.composerEnd,
@@ -579,6 +618,10 @@ func (a *App) buildDiffOverlays(tab *editor.Tab, w int) []editor.DiffOverlay {
 		return nil
 	}
 	file := a.reviewPathFor(tab.Path)
+	// The repo has to match too: two repos under one root can both hold
+	// "src/main.go", and matching on the relative path alone would hang
+	// alpha's markers on beta's diff.
+	repo := a.reviewRepoFor(tab.Path)
 	byRow := map[int][]editor.DiffOverlayLine{}
 	order := []int{}
 	appendTo := func(row int, line editor.DiffOverlayLine) int {
@@ -590,7 +633,7 @@ func (a *App) buildDiffOverlays(tab *editor.Tab, w int) []editor.DiffOverlay {
 	}
 
 	for i, c := range a.reviewBatch.Comments {
-		if c.File != file {
+		if c.File != file || c.Repo != repo {
 			continue
 		}
 		// The composer is showing this note right now; a marker under it
@@ -877,7 +920,14 @@ func (a *App) openDiffForComment(idx int) {
 		return
 	}
 	c := a.reviewBatch.Comments[idx]
-	a.openDiff(filepath.Join(a.rootDir, filepath.FromSlash(c.File)))
+	// c.File is relative to c.Repo, which is empty for a note written
+	// against a single-repo root — where the root is what it was always
+	// relative to.
+	base := c.Repo
+	if base == "" {
+		base = a.rootDir
+	}
+	a.openDiff(filepath.Join(base, filepath.FromSlash(c.File)))
 	tab := a.activeTabPtr()
 	if tab == nil || !tab.IsDiff() {
 		return
@@ -1120,11 +1170,28 @@ func (a *App) markStaleComments(snap gitSnapshot) {
 	if !snap.IsRepo || len(a.reviewBatch.Comments) == 0 {
 		return
 	}
+	// Keyed by repo AND relative path. With one repo every key's repo half
+	// is the empty string on the comment side, so the single-repo answer is
+	// the relative path exactly as before; with several, two repos holding
+	// the same relative path no longer keep each other's notes fresh.
+	multi := len(snap.Repos) > 0
 	inChangeset := make(map[string]bool, len(snap.Entries))
 	for _, e := range snap.Entries {
-		inChangeset[e.Rel] = true
+		repo := ""
+		if multi {
+			repo = e.Repo
+		}
+		inChangeset[staleKey(repo, e.Rel)] = true
 	}
 	for i := range a.reviewBatch.Comments {
-		a.reviewBatch.Comments[i].Stale = !inChangeset[a.reviewBatch.Comments[i].File]
+		c := a.reviewBatch.Comments[i]
+		a.reviewBatch.Comments[i].Stale = !inChangeset[staleKey(c.Repo, c.File)]
 	}
+}
+
+// staleKey joins a repo root and a repo-relative path into one map key.
+// NUL because it cannot appear in either half, so no pair of inputs can
+// collide by concatenation.
+func staleKey(repo, rel string) string {
+	return repo + "\x00" + rel
 }

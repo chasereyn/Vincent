@@ -27,7 +27,12 @@ import (
 // table succeeds with empty output, which keeps a test that cares about one
 // command from having to describe the other four.
 type fakeGit struct {
-	calls   [][]string
+	calls [][]string
+
+	// dirs is the directory each call ran in, parallel to calls. Recorded
+	// because phase 8a made "which repo did that write happen in" a real
+	// question with a wrong answer — see multirepo_test.go.
+	dirs    []string
 	replies map[string]fakeGitReply
 }
 
@@ -39,8 +44,9 @@ type fakeGitReply struct {
 }
 
 // run is the gitRunner the fake hands to the code under test.
-func (f *fakeGit) run(_ context.Context, _ string, args ...string) (string, string, error) {
+func (f *fakeGit) run(_ context.Context, dir string, args ...string) (string, string, error) {
 	f.calls = append(f.calls, args)
+	f.dirs = append(f.dirs, dir)
 	if r, ok := f.replies[args[0]]; ok {
 		return r.stdout, r.stderr, r.err
 	}

@@ -72,6 +72,21 @@ type Tree struct {
 	DirtyFiles   map[string]GitChangeKind
 	DirtyFolders map[string]GitChangeKind
 
+	// RepoBranches maps the absolute path of a folder that is a GIT REPO
+	// ROOT to the branch checked out in it, and the row draws that branch
+	// dimmed after the folder name ("alpha  main").
+	//
+	// Phase 8a: at work the root is a flat folder of company repos, and
+	// which branch each one is on is the fact a reviewer wants before
+	// clicking into it. The map is stamped on by the app from the same
+	// `git status` snapshot everything else derives from — this package
+	// never shells out, which is why it is a map handed in rather than a
+	// lookup performed here.
+	//
+	// Nil in the single-repo case on purpose: the panel footer already
+	// names the one branch, and repeating it on the root row is noise.
+	RepoBranches map[string]string
+
 	// IconsEnabled toggles the Nerd Font glyph that prefixes each row.
 	// Set by App.loadSpiceConfig at startup based on the user's
 	// config.json + auto-detection. Off means the row is rendered with
@@ -313,10 +328,19 @@ func (t *Tree) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			}
 		}
 
-		drawNodeRow(scr, th, x, rowY, w, item, active, change, t.IconsEnabled, rowBG)
+		drawNodeRow(scr, th, x, rowY, w, item, active, change, t.IconsEnabled, rowBG, t.branchFor(item.Node))
 		visible = append(visible, item.Node)
 	}
 	t.visible = visible
+}
+
+// branchFor returns the branch name to draw after a folder's name, or ""
+// for a file, an ordinary folder, or a single-repo project.
+func (t *Tree) branchFor(n *Node) string {
+	if n == nil || !n.IsDir || len(t.RepoBranches) == 0 {
+		return ""
+	}
+	return t.RepoBranches[n.Path]
 }
 
 // changeKind returns the git status color category for a tree node.
@@ -341,7 +365,9 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 // through as sidebar-coloured text on a highlighted background.
 // withIcons=true prefixes the name with a Nerd Font glyph; off renders the
 // legacy chevron-only look for terminals that can't show the private-use
-// glyphs.
+// glyphs. branch is the git branch checked out in this folder when the
+// folder is a repo root, drawn dimmed after the name and empty for
+// everything else.
 //
 // When icons are enabled a directory's glyph REPLACES the chevron rather
 // than sitting beside it — icons.FolderClosed/FolderOpen (the neo-tree /
@@ -351,7 +377,7 @@ func (t *Tree) changeKind(n *Node) GitChangeKind {
 // before. That's the visual cue you find in nvim-tree and friends: a quick
 // eye-scan picks out Go from Ruby from Markdown, and open from closed
 // folders, without reading any text.
-func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool, bg tcell.Color) {
+func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, active bool, change GitChangeKind, withIcons bool, bg tcell.Color, branch string) {
 	// Compute the row-level foreground via this priority cascade
 	// (highest wins last):
 	//
@@ -423,6 +449,8 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 
 	if !withIcons {
 		drawString(scr, col, y, remaining(), suffix, rowStyle)
+		col += runeLen(suffix)
+		drawBranchSuffix(scr, th, col, y, remaining(), bg, branch)
 		return
 	}
 
@@ -450,6 +478,27 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 		sep = " "
 	}
 	drawString(scr, col, y, remaining(), sep+suffix, rowStyle)
+	col += runeLen(sep + suffix)
+	drawBranchSuffix(scr, th, col, y, remaining(), bg, branch)
+}
+
+// drawBranchSuffix writes "  <branch>" after a repo folder's name, in
+// DimText so it reads as metadata rather than as part of the name.
+//
+// It is dropped entirely rather than truncated when the row has no room:
+// half a branch name is worse than none, because "mai" and "main" are both
+// plausible branches and the reader cannot tell which they are looking at.
+// Two spaces of separation, matching the panel's dimmed parent-directory
+// column, so the eye reads it as a second field.
+func drawBranchSuffix(scr tcell.Screen, th theme.Theme, x, y, avail int, bg tcell.Color, branch string) {
+	if branch == "" {
+		return
+	}
+	text := "  " + branch
+	if avail < runeLen(text) {
+		return
+	}
+	drawString(scr, x, y, avail, text, tcell.StyleDefault.Background(bg).Foreground(th.DimText))
 }
 
 // runeLen returns the visible cell count of s (one cell per rune) — used to

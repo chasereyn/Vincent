@@ -58,8 +58,43 @@ into the agent's prompt. Version 0.4.0 followed the first real session
 (menu removed, `Esc ?`, `Esc o`, `Esc z`, wider tree, folder glyphs).
 Phases 3b (git writes), 6b (find/replace, new file, save-as,
 triple-click, Enter indent) and 7 (markdown) landed on 2026-09-03 as
-version 0.5.0 and have not been seen on a real terminal. Then phases 8
-and 9.
+version 0.5.0 and have not been seen on a real terminal. Phase 8a
+(multi-repo) followed on the same day. Then 8b (content search) and 9.
+
+- **Phase 8a, multi-repo.** The root does not have to be a repository any
+  more. `internal/repos` discovers every repo at or under it and
+  `internal/app/multirepo.go` is the registry on top: `a.repos`, refreshed
+  on `refreshGitStatus` and on the ten-second tick so a fresh clone appears
+  without a restart, plus `repoFor` / `gitPathFor` ("which directory does a
+  git command about this path run in, and what pathspec does it get") and
+  `activeRepo` ("which repo do the writes and the branch row act on" —
+  active tab, then the last Changes row clicked, then the first repo with
+  changes, then the first repo). `loadReposSnapshot` runs the SAME
+  `gitentries.go` parse once per repo, four goroutines at a time on the
+  poll worker, and merges the results into one `gitSnapshot` that now
+  carries per-repo members in `.Repos` — so the tree colours a file in any
+  repo, the rollup colours the repo folder, and there is still exactly one
+  `gitPollEvent` per poll. The panel grows a `⑂ name / branch` header per
+  repo WITH changes; a clean repo is not listed and `Changes (N)` counts
+  the folder. The three writes run in `activeRepo()` and the commit box
+  says "Commit to alpha" so the target is never inferred. Review notes are
+  recorded relative to the OWNING repo, because the agent receiving the
+  batch has that repo as its working directory — `review.Comment` gained an
+  unrendered `Repo` field for the same reason, since two repos under one
+  root can both hold `src/main.go`. A repo folder in the tree shows its
+  branch dimmed after the name.
+
+  **The single-repo root is unchanged, deliberately and by
+  construction.** `singleRepoMode()` short-circuits every helper to
+  `a.rootDir` and the absolute pathspec — which is exactly what each call
+  site passed before — so the argv git sees is byte-identical, the panel
+  draws no repo header, `reviewPathFor` stays root-relative, and the tree
+  gets no branch map. That branch also covers a root that sits INSIDE a
+  repo: `repos.Discover` only looks downward, finds nothing, and letting
+  git walk up from the root is still the right answer. Every one of those
+  facts is pinned by a test in `multirepo_test.go` that states the pre-8a
+  answer explicitly. Do not collapse the two paths into one "cleaner" one
+  without re-reading those tests.
 
 - **Phase 3b, git writes.** The three blunt writes, off the Changes panel
   and off three leader keys. `Esc c` arms a commit message box in the panel
@@ -173,7 +208,8 @@ internal/app/find.go        297  In-file find bar
 internal/app/branchpicker.go 607 Esc b: list branches, check one out
 internal/app/gitwrite.go    354  THE three git writes + the injectable runner
 internal/app/commitbox.go   359  Esc c: the footer commit box and its commit
-internal/app/gitentries.go  258  THE git status parse — tree and panel both
+internal/app/multirepo.go   351  THE repo registry: repoFor / gitPathFor / activeRepo, per-repo status fan-out
+internal/app/gitentries.go  302  THE git status parse — tree and panel both; gitSnapshot.Repos holds the per-repo merge
 internal/app/diffview.go    250  git diff shell-outs, diff tabs, live refresh
 internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
 internal/app/frame.go       219  frameKey: skip the repaint when motion changed nothing
@@ -195,6 +231,7 @@ internal/markdown           873  Row model: goldmark AST -> styled Span rows, no
 internal/filetree           736  Lazy tree, refresh, guides, hover, CollapseAll
 internal/finder             583  Filename index (git ls-files) + fzy-style scorer
 internal/diff               364  Unified-diff parser — no tcell, no git, pure
+internal/repos              127  Discover / IsRepo / Owner / Rel — which repo owns a path. Pure.
 internal/icons              390  Nerd Font glyphs per file type
 internal/theme              251  The palette. Ayu Darker on #030405
 internal/config             133  ~/.config/vincent/config.json (icons, tabBar)
@@ -440,7 +477,7 @@ starting its phase.
 | 6a | Editor safety: bracketed paste, conflict model | **done** |
 | 6b | Editor: find/replace, new file, save-as, triple-click line select, Enter carries indent | **done** |
 | 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | **done** |
-| 8 | Multi-repo workspace + content search | next |
+| 8 | Multi-repo workspace + content search | **8a done**, content search is 8b |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | |
 
 **Phase 8 is still wanted; do not trim it because `Esc o` exists.** Confirmed
@@ -448,8 +485,10 @@ by Chase on 2026-09-03: at work the root is `~/Developer/RP-Repos`, a flat
 folder of company repos, and the root switcher is how he moves between that
 folder and a personal project at home. So a root that *contains* repos is
 the normal work case, and the Changes panel, the branch row, and the three
-git writes must act on the repo that owns the active file. Myers diff for
-exact word tint and buffer-vs-disk also lands in phase 8.
+git writes must act on the repo that owns the active file. That half is
+**8a, done** — see the paragraph in "Where it stands". What is left is
+**8b**: content search across every repo, and the Myers diff for exact word
+tint and buffer-vs-disk.
 
 Phases 4 and 5 do not depend on 3 and can run in parallel with it.
 
