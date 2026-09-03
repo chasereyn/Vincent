@@ -133,14 +133,13 @@ func TestConflictPrompt_ReloadTakesTheDiskVersion(t *testing.T) {
 // addition, because that is the question being asked: did the two touch
 // the same lines?
 func TestBufferVsDiskRows_ShowsBothSides(t *testing.T) {
-	requireGit(t)
 	dir := t.TempDir()
 	target := filepath.Join(dir, "note.txt")
 	if err := os.WriteFile(target, []byte("from the agent\n"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	rows, ok := bufferVsDiskRows(dir, target, "mine\n")
+	rows, ok := bufferVsDiskRows(target, "mine\n")
 	if !ok {
 		t.Fatal("two different files should produce a diff")
 	}
@@ -155,27 +154,54 @@ func TestBufferVsDiskRows_ShowsBothSides(t *testing.T) {
 }
 
 // TestBufferVsDiskRows_IdenticalReportsNothing keeps the "no differences"
-// case out of the diff tab, and proves the temp file is cleaned up rather
-// than left holding a copy of unsaved work.
+// case out of the diff tab.
 func TestBufferVsDiskRows_IdenticalReportsNothing(t *testing.T) {
-	requireGit(t)
 	dir := t.TempDir()
 	target := filepath.Join(dir, "note.txt")
 	if err := os.WriteFile(target, []byte("same\n"), 0o644); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if _, ok := bufferVsDiskRows(dir, target, "same\n"); ok {
+	if _, ok := bufferVsDiskRows(target, "same\n"); ok {
 		t.Fatal("identical content should report no diff")
+	}
+}
+
+// TestBufferVsDiskRows_WorksOutsideAGitRepo is the reason bufferVsDiskRows
+// stopped shelling out to `git diff --no-index`: a conflict can happen on a
+// file that was never inside a repo at all — herdr's working directory,
+// scratch notes, anything opened by absolute path — and the diff still has
+// to render. t.TempDir() here is deliberately NOT inside the vincent repo
+// and has no .git of its own, so a regression back to a git shell-out would
+// fail this the same way it used to fail for real.
+func TestBufferVsDiskRows_WorksOutsideAGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "scratch.txt")
+	if err := os.WriteFile(target, []byte("on disk\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rows, ok := bufferVsDiskRows(target, "in the buffer\n")
+	if !ok {
+		t.Fatal("a file outside any git repo should still diff")
+	}
+	var texts []string
+	for _, r := range rows {
+		texts = append(texts, r.Text)
+	}
+	joined := strings.Join(texts, "\n")
+	if !strings.Contains(joined, "in the buffer") || !strings.Contains(joined, "on disk") {
+		t.Fatalf("diff should carry both sides; got:\n%s", joined)
 	}
 }
 
 // TestConflictPrompt_ShowDiffOpensAFrozenDiffTab walks the button. The tab
 // has to be titled distinctly (two diffs of one file are otherwise
 // indistinguishable) and marked frozen, so the reconcile loop leaves it
-// alone instead of swapping in the ordinary git diff.
+// alone instead of swapping in the ordinary git diff. Show diff is
+// in-process now (diff.Unified, not a git shell-out), so this needs no
+// requireGit guard.
 func TestConflictPrompt_ShowDiffOpensAFrozenDiffTab(t *testing.T) {
-	requireGit(t)
 	a, _ := conflictedApp(t, "from the agent\n")
 	a.openConflictPrompt(0)
 
@@ -205,11 +231,10 @@ func TestConflictPrompt_ShowDiffOpensAFrozenDiffTab(t *testing.T) {
 }
 
 // TestReconcileDiffTab_LeavesAFrozenDiffAlone is the other half of that:
-// the reconcile pass must not re-run git over a frozen diff, or the
+// the reconcile pass must not re-run the diff over a frozen tab, or the
 // buffer-vs-disk comparison silently becomes the file's git diff while the
 // user is reading it.
 func TestReconcileDiffTab_LeavesAFrozenDiffAlone(t *testing.T) {
-	requireGit(t)
 	a, _ := conflictedApp(t, "from the agent\n")
 	a.openBufferVsDisk(0)
 
