@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.6.2`
+- Version: `internal/version/version.go`, currently `0.6.3`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -328,15 +328,17 @@ preferences:
 - Pane defaults are 36 (tree) and 40 (Changes), measured off the widths
   Chase had dragged them to. The 40% startup cap still applies to the tree.
 - `SidebarBG` is `#090a0d`, one shade above the `#030405` editor ground.
-- `StatusFG` is lavender `#d2a6ff` so the status bar reads as a different
-  kind of text from the blue accent above it.
+- Every UI blue is lavender `#bfaee0`: `Accent`, `StatusFG`, `FolderColor`,
+  `GitRenamed`. Chase first asked for the status bar in purple, then for
+  the rest of the blue chrome to follow and the purple to be less
+  saturated. Syntax colours keep Ayu's values.
 - The tree header is "Explorer" in accent bold with a rule under it, the
   same shape as the Changes header. `headerRows` in `filetree.go` is 3
   (title, rule, root name) and HitTest, hover, and Render all read it.
 - Indent guides end with `└` on a folder's last child and go blank below
   it. `guideSegment` is the whole rule.
-- Hidden folders are the same colour as other folders; hidden files still
-  dim.
+- Hidden files and folders both dim to `Muted`. Hidden folders were
+  briefly the folder colour and Chase asked for grey back.
 - With icons on, files and folders both draw glyph + two spaces + name, so
   siblings start their names in the same column.
 - The Changes panel puts a blank row between repo groups.

@@ -170,10 +170,13 @@ type Theme struct {
 //     identical and the splitter alone divided the panes. Subtle must
 //     still contrast with both grounds, because it is the guides and
 //     rules on the sidebar as well as the splitter on the editor.
-//   - StatusFG is lavender (#d2a6ff, Ayu's number colour) rather than the
-//     blue Accent, also from 2026-09-03: the status bar carries the leader
-//     hint, and Chase wanted it to read as a different kind of text from
-//     the accent-blue headers and folder names above it.
+//   - Every UI blue became lavender on 2026-09-03. The status bar went
+//     first (#d2a6ff, Ayu's number colour); Chase then asked for the rest
+//     of the blue chrome — Accent, FolderColor, GitRenamed — to follow, and
+//     for the purple to be less saturated. All four are #bfaee0 now. Only
+//     SynProperty keeps Ayu's blue, because it is syntax, not chrome, and
+//     SynNumber/SynBuiltin keep the saturated #d2a6ff for the same reason.
+//     Hidden files and folders both dim to Muted.
 //   - The ground is set explicitly via tcell.NewRGBColor rather than
 //     tcell.ColorDefault, which would inherit whatever the host terminal
 //     is using and would not reliably match Ghostty's #030405.
@@ -204,8 +207,8 @@ func Default() Theme {
 		// theme.BG on a solid blue StatusBG; with a near-black StatusBG
 		// that would be nearly black-on-black, so the bar draws accent
 		// text on the ground instead of a coloured slab.
-		StatusFG:    tcell.NewRGBColor(0xd2, 0xa6, 0xff),
-		Accent:      tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		StatusFG:    tcell.NewRGBColor(0xbf, 0xae, 0xe0), // lavender, see the note above
+		Accent:      tcell.NewRGBColor(0xbf, 0xae, 0xe0), // lavender, was Ayu blue #5ac1fe until 2026-09-03
 		AccentSoft:  tcell.NewRGBColor(0xdf, 0xde, 0xda),
 		Selection:   tcell.NewRGBColor(0x18, 0x31, 0x41),
 		Modified:    tcell.NewRGBColor(0xfe, 0xb4, 0x54),
@@ -213,7 +216,7 @@ func Default() Theme {
 		GitModified: tcell.NewRGBColor(0xfe, 0xb4, 0x54),
 		GitAdded:    tcell.NewRGBColor(0xaa, 0xd8, 0x4c),
 		GitDeleted:  tcell.NewRGBColor(0xef, 0x71, 0x77),
-		GitRenamed:  tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		GitRenamed:  tcell.NewRGBColor(0xbf, 0xae, 0xe0),
 		GitMixed:    tcell.NewRGBColor(0xfe, 0xb4, 0x54),
 
 		// Diff. Ayu Darker's add/del tints, blended over #030405 rather
@@ -236,7 +239,7 @@ func Default() Theme {
 		// plain file name is primary content, not secondary UI chrome, and
 		// it has to stay visually distinct from Muted (dotfiles, line
 		// numbers) or the dotfile-dimming cue disappears.
-		FolderColor: tcell.NewRGBColor(0x5a, 0xc1, 0xfe),
+		FolderColor: tcell.NewRGBColor(0xbf, 0xae, 0xe0), // folders follow Accent
 		FileColor:   tcell.NewRGBColor(0xdf, 0xde, 0xda),
 
 		// Syntax — Ayu Darker.
