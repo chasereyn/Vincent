@@ -352,6 +352,14 @@ type App struct {
 	finderSelected int
 	finderResults  []finder.Result
 
+	// search is the Esc-F content search modal (Phase 8b) — a query field
+	// plus streamed grep-style results across every file the finder's
+	// index knows about. See internal/app/search.go for the whole thing;
+	// it's a struct rather than flattened fields (unlike finder's above)
+	// because it carries a debounce timer and a cancel func that need to
+	// travel together.
+	search searchState
+
 	// rootPicker is the Esc-o root switcher — recent roots, or a typed
 	// path browsed a directory at a time. configPath is where
 	// loadUserConfig read config.json from, held so a root switch can
@@ -833,6 +841,22 @@ func (a *App) handleEvent(ev tcell.Event) {
 		if a.finderOpen {
 			a.refreshFinderResults()
 		}
+		// The content search modal's file list comes from the same
+		// index (finder.Paths()); a query typed before the first build
+		// landed should also get to run now instead of sitting on
+		// "indexing…" until the next keystroke.
+		if a.search.open && len(a.search.query) > 0 && a.search.results == nil && !a.search.searching {
+			a.scheduleSearch()
+		}
+	case *searchDebounceEvent:
+		// The 150ms debounce window closed with no further keystroke.
+		// Stale (superseded by a newer keystroke's own debounce) events
+		// are dropped by generation, same contract as searchResultsEvent.
+		a.runSearchIfCurrent(e.generation)
+	case *searchResultsEvent:
+		// A batch of matches (or the final outcome) came back from the
+		// search engine's worker pool. See search.go.
+		a.applySearchResults(e)
 	}
 }
 
@@ -1135,6 +1159,10 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 		a.handleFinderKey(ev)
 		return
 	}
+	if a.search.open {
+		a.handleSearchKey(ev)
+		return
+	}
 	if a.rootPicker.open {
 		a.handleRootPickerKey(ev)
 		return
@@ -1366,6 +1394,10 @@ func (a *App) handleMouse(ev *tcell.EventMouse) {
 	}
 	if a.finderOpen {
 		a.handleFinderMouse(x, y, btn)
+		return
+	}
+	if a.search.open {
+		a.handleSearchMouse(x, y, btn)
 		return
 	}
 	if a.rootPicker.open {
@@ -2558,6 +2590,9 @@ func (a *App) draw() {
 	}
 	if a.finderOpen {
 		a.drawFinder()
+	}
+	if a.search.open {
+		a.drawSearch()
 	}
 	if a.rootPicker.open {
 		a.drawRootPicker()

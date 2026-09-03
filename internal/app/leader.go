@@ -94,6 +94,7 @@ func leaderBindings() []leaderBinding {
 		// Search
 		{'p', "find file", leaderGroupSearch, (*App).openFinder},
 		{'/', "find", leaderGroupSearch, (*App).openFind},
+		{'F', "find in files", leaderGroupSearch, (*App).openSearch},
 		// View
 		{'f', "explorer", leaderGroupView, (*App).menuToggleSidebar},
 		{'t', "tab bar", leaderGroupView, (*App).menuToggleTabBar},
