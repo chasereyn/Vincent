@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.6.5`
+- Version: `internal/version/version.go`, currently `0.6.6`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -285,7 +285,7 @@ internal/clipboard           50  OSC 52 — works over SSH and through tmux
 These are hard requirements from the person this is built for. Do not
 trade them away for convenience.
 
-1. **`#030405` background, set explicitly**, never `tcell.ColorDefault` — (the two side panes sit one shade above it at `#090a0d`, asked for on 2026-09-03; the editor ground itself is still `#030405`) —
+1. **`#030405` background, set explicitly**, never `tcell.ColorDefault` —
    that inherits the host terminal and will not reliably match. This is
    Chase's Ghostty background and the ground his Zed is re-based onto. The
    whole palette is his Zed: the Ayu Darker extension plus his
@@ -327,7 +327,12 @@ preferences:
 
 - Pane defaults are 36 (tree) and 40 (Changes), measured off the widths
   Chase had dragged them to. The 40% startup cap still applies to the tree.
-- `SidebarBG` is `#090a0d`, one shade above the `#030405` editor ground.
+- `SidebarBG` is `#030405`, the same as the editor. It was one shade
+  lighter for a few hours; Chase sent a swatch of `#030405` and asked for
+  both panes and the editor to match it.
+- `Esc e` opens the file behind a diff tab as a text tab and reveals it in
+  the tree. Double-clicking a Changes row does the same. Single click still
+  opens the diff.
 - Every UI blue is lavender `#bfaee0`: `Accent`, `StatusFG`, `FolderColor`,
   `GitRenamed`. Chase first asked for the status bar in purple, then for
   the rest of the blue chrome to follow and the purple to be less

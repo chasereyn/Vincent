@@ -515,3 +515,72 @@ func TestReflowPanels_WaitsForAScreenSize(t *testing.T) {
 			a.sidebarWidth, a.gitPanelWidth, defaultSidebarWidth, defaultGitPanelWidth)
 	}
 }
+
+// TestGitPanel_DoubleClickOpensTheFile pins the second gesture on a panel
+// row: two clicks within doubleClickMs open the file as an editable text
+// tab, revealed in the tree, rather than a second diff.
+func TestGitPanel_DoubleClickOpensTheFile(t *testing.T) {
+	_, a := panelApp(t)
+	a.draw()
+
+	var target gitPanelRowRect
+	for _, r := range a.lastGitPanelRows {
+		if r.entry.Name == "modified.txt" {
+			target = r
+		}
+	}
+	if target.entry.Name == "" {
+		t.Fatal("modified.txt was not drawn")
+	}
+
+	px, _, _, _ := a.gitPanelRect()
+	a.gitPanelClick(px+gitPanelIndent, target.y)
+	a.gitPanelClick(px+gitPanelIndent, target.y)
+
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsDiff() || tab.ReadOnly() {
+		t.Fatal("double-clicking a panel row did not open the file as a text tab")
+	}
+	if filepath.Base(tab.Path) != "modified.txt" {
+		t.Errorf("opened %q, want modified.txt", tab.Path)
+	}
+	if a.tree.ActiveFile != tab.Path {
+		t.Errorf("tree active file = %q, want %q", a.tree.ActiveFile, tab.Path)
+	}
+}
+
+// TestOpenFileFromDiff_EscEOpensTheFile pins Esc e: on a diff tab it opens
+// the underlying file as a text tab and points the tree at it; on a text
+// tab it flashes and changes nothing.
+func TestOpenFileFromDiff_EscEOpensTheFile(t *testing.T) {
+	_, a := panelApp(t)
+	a.draw()
+	var target gitPanelRowRect
+	for _, r := range a.lastGitPanelRows {
+		if r.entry.Name == "modified.txt" {
+			target = r
+		}
+	}
+	px, _, _, _ := a.gitPanelRect()
+	a.gitPanelClick(px+gitPanelIndent, target.y)
+	if tab := a.activeTabPtr(); tab == nil || !tab.IsDiff() {
+		t.Fatal("seed: expected a diff tab")
+	}
+
+	a.openFileFromDiff()
+	tab := a.activeTabPtr()
+	if tab == nil || tab.IsDiff() {
+		t.Fatal("Esc e on a diff did not open the file")
+	}
+	if a.tree.ActiveFile != tab.Path {
+		t.Errorf("tree active file = %q, want %q", a.tree.ActiveFile, tab.Path)
+	}
+
+	a.openFileFromDiff()
+	if got := a.activeTabPtr(); got != tab {
+		t.Fatal("Esc e on a text tab should change nothing")
+	}
+	if a.statusMsg == "" {
+		t.Fatal("Esc e on a text tab should explain itself in the status bar")
+	}
+}

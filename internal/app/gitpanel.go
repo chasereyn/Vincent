@@ -26,6 +26,7 @@ package app
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -355,10 +356,38 @@ func (a *App) gitPanelClick(x, y int) {
 			// the footer and the writes pointed at the repo the reviewer
 			// last chose even after they close the tab it opened.
 			a.setGitPanelRepo(r.entry.Repo)
+			// A double-click opens the file itself, revealed in the tree,
+			// instead of its diff — the "now take me to it" gesture Chase
+			// asked for on 2026-09-03. Esc e does the same from a diff tab.
+			now := time.Now()
+			double := a.lastClick.x == x && a.lastClick.y == y && now.Sub(a.lastClick.when) < doubleClickMs
+			a.lastClick = clickRecord{x: x, y: y, when: now}
+			if double {
+				a.openFile(r.entry.Abs)
+				return
+			}
 			a.openDiff(r.entry.Abs)
 			return
 		}
 	}
+}
+
+// openFileFromDiff is Esc e: from a diff tab, open the underlying file as
+// an editable text tab and reveal it in the tree. The Changes panel opens
+// diffs, which is right for reading; this is the step after reading, when
+// the fix is small enough to type. On a text tab it says so and does
+// nothing — Esc d is the way back to the diff.
+func (a *App) openFileFromDiff() {
+	tab := a.activeTabPtr()
+	if tab == nil || tab.Path == "" {
+		a.flash("Open a diff first: click a file in the Changes panel")
+		return
+	}
+	if !tab.IsDiff() {
+		a.flash("Already on the file · Esc d for its diff")
+		return
+	}
+	a.openFile(tab.Path)
 }
 
 // branchRowClick opens the branch picker when the click landed on the

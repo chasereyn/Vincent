@@ -170,7 +170,7 @@ func TestStatusBar_LeaderHintTruncatesWithEllipsis(t *testing.T) {
 	}
 	// The head is what has to survive: review bindings lead the table
 	// precisely so the tail is what gets dropped.
-	if !strings.Contains(got, "Esc — d diff · r note") {
+	if !strings.Contains(got, "Esc — d diff · e open file · r note") {
 		t.Fatalf("truncation ate the head of the table: %q", got)
 	}
 }

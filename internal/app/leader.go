@@ -79,6 +79,10 @@ func leaderBindings() []leaderBinding {
 		// Review — the reason Vincent exists, so first in the table and
 		// therefore last to be truncated out of the status hint.
 		{'d', "diff", leaderGroupReview, (*App).menuViewDiff},
+		// 'e' is the way out of a diff: open the file it describes, in
+		// the editor and in the tree, for the correction that is smaller
+		// than a note.
+		{'e', "open file", leaderGroupReview, (*App).openFileFromDiff},
 		// 'r' is the review composer, not Redo. Vincent is a review
 		// client: writing a note is the second most common thing anyone
 		// does in it, and redo is inherited machinery.

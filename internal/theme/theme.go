@@ -21,7 +21,7 @@ import "github.com/gdamore/tcell/v2"
 type Theme struct {
 	// --- Surfaces ---
 	BG        tcell.Color // Editor background. See Default's doc comment.
-	SidebarBG tcell.Color // File tree / Changes panel background. One shade above BG.
+	SidebarBG tcell.Color // File tree / Changes panel background. Same ground as BG.
 	StatusBG  tcell.Color // Status bar background. Same ground as BG.
 	StatusFG  tcell.Color // Status bar text, drawn on StatusBG.
 	LineHL    tcell.Color // Active line highlight.
@@ -164,12 +164,11 @@ type Theme struct {
 //
 // Two consequences worth knowing before you "fix" this:
 //
-//   - SidebarBG sits one shade above BG (#090a0d over #030405) since
-//     2026-09-03, when Chase asked for the side panes to be "very
-//     slightly" lighter after seeing 0.6.0. Before that the two were
-//     identical and the splitter alone divided the panes. Subtle must
-//     still contrast with both grounds, because it is the guides and
-//     rules on the sidebar as well as the splitter on the editor.
+//   - BG and SidebarBG are identical on purpose. The panes were one shade
+//     lighter (#090a0d) for a few hours on 2026-09-03 at Chase's request;
+//     he then sent a swatch of #030405 and asked for both panes and the
+//     editor to be that colour. The splitter and the header rules, in
+//     Subtle, are what divide the panes, so Subtle must contrast with BG.
 //   - Every UI blue became lavender on 2026-09-03. The status bar went
 //     first (#d2a6ff, Ayu's number colour); Chase then asked for the rest
 //     of the blue chrome — Accent, FolderColor, GitRenamed — to follow, and
@@ -196,7 +195,7 @@ func Default() Theme {
 	return Theme{
 		// Surfaces — Ghostty's ground. See the note above.
 		BG:        tcell.NewRGBColor(0x03, 0x04, 0x05),
-		SidebarBG: tcell.NewRGBColor(0x09, 0x0a, 0x0d),
+		SidebarBG: tcell.NewRGBColor(0x03, 0x04, 0x05),
 		StatusBG:  tcell.NewRGBColor(0x03, 0x04, 0x05),
 		// The active line's background, from Chase's Zed settings.
 		LineHL: tcell.NewRGBColor(0x18, 0x1a, 0x1e),
