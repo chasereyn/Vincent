@@ -240,16 +240,22 @@ func atoiPrefix(s string) (int, bool) {
 //
 // The pairing rule is the one VS Code uses: a run of consecutive deletions
 // is matched one-for-one against the run of additions immediately following
-// it, and each pair is compared by common prefix and common suffix. It is
-// not a real diff algorithm — a line inserted in the middle of a changed
-// block will mis-pair the rest of that block. That is an acceptable trade: a
-// character-level Myers diff per line costs more than it buys when the
-// common case is one line edited in place, and a wrong tint is cosmetic
+// it. It is not a real diff algorithm at the LINE level — a line inserted in
+// the middle of a changed block will mis-pair the rest of that block — but
+// that is an acceptable trade: reordering an entire hunk's pairing to find
+// the globally optimal line alignment costs more than it buys when the
+// common case is one line edited in place, and a wrong pairing is cosmetic
 // while the +/- markers and line numbers stay authoritative.
 //
-// Pairs that share nothing (empty prefix and suffix) are left untinted:
-// highlighting the entire line as "the changed part" says nothing the row
-// tint hasn't already said.
+// Each paired line, once matched, IS compared with a real diff: see
+// tokenWordRange in myers.go, which runs a token-level Myers diff and marks
+// the tightest span covering every changed token. That replaced the
+// original prefix/suffix guess (still here as assignPrefixSuffixRange, the
+// fallback for a pair too big to be worth diffing token-by-token).
+//
+// Pairs that share nothing (no common token, or — in the fallback — empty
+// prefix and suffix) are left untinted: highlighting the entire line as
+// "the changed part" says nothing the row tint hasn't already said.
 func assignWordRanges(rows []Row) {
 	i := 0
 	for i < len(rows) {
@@ -273,23 +279,14 @@ func assignWordRanges(rows []Row) {
 		for k := 0; k < pairs; k++ {
 			del := &rows[delStart+k]
 			add := &rows[addStart+k]
-			oldRunes := []rune(del.Text)
-			newRunes := []rune(add.Text)
 
-			prefix := 0
-			for prefix < len(oldRunes) && prefix < len(newRunes) && oldRunes[prefix] == newRunes[prefix] {
-				prefix++
-			}
-			suffix := 0
-			for suffix < len(oldRunes)-prefix && suffix < len(newRunes)-prefix &&
-				oldRunes[len(oldRunes)-1-suffix] == newRunes[len(newRunes)-1-suffix] {
-				suffix++
-			}
-			if prefix+suffix == 0 {
+			ds, de, as, ae, ok := tokenWordRange(del.Text, add.Text)
+			if !ok {
+				assignPrefixSuffixRange(del, add)
 				continue
 			}
-			del.WordStart, del.WordEnd = prefix, len(oldRunes)-suffix
-			add.WordStart, add.WordEnd = prefix, len(newRunes)-suffix
+			del.WordStart, del.WordEnd = ds, de
+			add.WordStart, add.WordEnd = as, ae
 		}
 	}
 }
