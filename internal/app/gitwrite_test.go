@@ -79,6 +79,12 @@ func bareOrigin(t *testing.T, repo string) string {
 	t.Helper()
 	dir := t.TempDir()
 	gitRun(t, dir, "init", "-q", "--bare")
+	// A fresh bare repo's HEAD points at whatever the host git's default
+	// branch is — master on the GitHub runners, which never receives a
+	// push of main, so `rev-parse HEAD` there compared against nothing and
+	// the 1.0.0 release run failed on it. Point HEAD at main explicitly;
+	// symbolic-ref works on every git version, --initial-branch does not.
+	gitRun(t, dir, "symbolic-ref", "HEAD", "refs/heads/main")
 	gitRun(t, repo, "remote", "add", "origin", dir)
 	return dir
 }
