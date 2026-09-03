@@ -221,3 +221,161 @@ func TestMatchAtRune_HitAndMiss(t *testing.T) {
 		t.Fatalf("col 9 should be inside match 1, got %d", got)
 	}
 }
+
+// TestReplaceCurrentMatch_ReplacesAndAdvances replaces the first "foo" of
+// three with "X" and checks both that the buffer changed and that the
+// find state moved on to the next real match rather than re-triggering on
+// the text we just inserted.
+func TestReplaceCurrentMatch_ReplacesAndAdvances(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("foo foo foo")
+	tab.SetFindQuery("foo")
+	if ok := tab.ReplaceCurrentMatch("X"); !ok {
+		t.Fatal("ReplaceCurrentMatch reported failure on a real match")
+	}
+	if got := tab.Buffer.Lines[0]; got != "X foo foo" {
+		t.Fatalf("buffer after replace = %q, want %q", got, "X foo foo")
+	}
+	if len(tab.FindMatches) != 2 {
+		t.Fatalf("expected 2 remaining matches, got %d", len(tab.FindMatches))
+	}
+	if tab.FindIndex != 0 {
+		t.Fatalf("expected to land on the next match (index 0 of the remaining 2), got %d", tab.FindIndex)
+	}
+}
+
+// TestReplaceCurrentMatch_OneUndoStep pins the undo contract: replacing a
+// single match and then calling Undo once must restore the original text
+// completely, not leave the delete-then-insert half-applied.
+func TestReplaceCurrentMatch_OneUndoStep(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("hello world")
+	tab.SetFindQuery("world")
+	tab.ReplaceCurrentMatch("there")
+	if got := tab.Buffer.Lines[0]; got != "hello there" {
+		t.Fatalf("buffer after replace = %q", got)
+	}
+	if !tab.Undo() {
+		t.Fatal("Undo reported nothing to undo")
+	}
+	if got := tab.Buffer.Lines[0]; got != "hello world" {
+		t.Fatalf("one Undo should fully restore the original line, got %q", got)
+	}
+	if tab.Undo() {
+		t.Fatal("a second Undo should have nothing left to do — replace was not one step")
+	}
+}
+
+// TestReplaceCurrentMatch_NoMatchIsNoOp guards the empty-result-set case:
+// replacing with no current match must not panic or touch the buffer.
+func TestReplaceCurrentMatch_NoMatchIsNoOp(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("hello world")
+	tab.SetFindQuery("zzz")
+	if tab.ReplaceCurrentMatch("X") {
+		t.Fatal("ReplaceCurrentMatch should report false with no current match")
+	}
+	if got := tab.Buffer.Lines[0]; got != "hello world" {
+		t.Fatalf("buffer should be untouched, got %q", got)
+	}
+}
+
+// TestReplaceCurrentMatch_RefusedOnReadOnly pins the belt-and-braces
+// guard: a diff tab (or any read-only mode) must refuse a replace even if
+// something upstream forgot to gate the call.
+func TestReplaceCurrentMatch_RefusedOnReadOnly(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("hello world")
+	tab.Mode = diffMode
+	tab.SetFindQuery("world")
+	if tab.ReplaceCurrentMatch("there") {
+		t.Fatal("ReplaceCurrentMatch should refuse on a read-only tab")
+	}
+	if got := tab.Buffer.Lines[0]; got != "hello world" {
+		t.Fatalf("buffer should be untouched, got %q", got)
+	}
+}
+
+// TestReplaceAll_ReplacesEveryMatch replaces all three occurrences of
+// "foo" and checks the resulting text and the reported count.
+func TestReplaceAll_ReplacesEveryMatch(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("foo bar foo baz foo")
+	tab.SetFindQuery("foo")
+	n := tab.ReplaceAll("XYZ")
+	if n != 3 {
+		t.Fatalf("expected 3 replacements, got %d", n)
+	}
+	want := "XYZ bar XYZ baz XYZ"
+	if got := tab.Buffer.Lines[0]; got != want {
+		t.Fatalf("buffer after ReplaceAll = %q, want %q", got, want)
+	}
+}
+
+// TestReplaceAll_BackToFrontKeepsOffsetsValid uses a replacement that is a
+// different length than the query, which would corrupt later matches'
+// offsets if ReplaceAll walked front-to-back instead of back-to-front.
+func TestReplaceAll_BackToFrontKeepsOffsetsValid(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("a foo b foo c foo d")
+	tab.SetFindQuery("foo")
+	n := tab.ReplaceAll("verylongreplacement")
+	if n != 3 {
+		t.Fatalf("expected 3 replacements, got %d", n)
+	}
+	want := "a verylongreplacement b verylongreplacement c verylongreplacement d"
+	if got := tab.Buffer.Lines[0]; got != want {
+		t.Fatalf("buffer after ReplaceAll = %q, want %q", got, want)
+	}
+}
+
+// TestReplaceAll_OneUndoStep pins the headline contract: no matter how
+// many matches Replace All touches, a single Undo restores all of them at
+// once.
+func TestReplaceAll_OneUndoStep(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("foo\nfoo\nfoo")
+	tab.SetFindQuery("foo")
+	if n := tab.ReplaceAll("bar"); n != 3 {
+		t.Fatalf("expected 3 replacements, got %d", n)
+	}
+	if !tab.Undo() {
+		t.Fatal("Undo reported nothing to undo")
+	}
+	want := []string{"foo", "foo", "foo"}
+	if !reflect.DeepEqual(tab.Buffer.Lines, want) {
+		t.Fatalf("one Undo should restore all 3 replacements, got %+v", tab.Buffer.Lines)
+	}
+	if tab.Undo() {
+		t.Fatal("a second Undo should have nothing left to do — ReplaceAll was not one step")
+	}
+}
+
+// TestReplaceAll_NoMatchesReturnsZero guards the empty case: no query
+// hits means no replacements and no undo entry pushed.
+func TestReplaceAll_NoMatchesReturnsZero(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("hello world")
+	tab.SetFindQuery("zzz")
+	if n := tab.ReplaceAll("X"); n != 0 {
+		t.Fatalf("expected 0 replacements, got %d", n)
+	}
+	if tab.CanUndo() {
+		t.Fatal("ReplaceAll with no matches should not push an undo entry")
+	}
+}
+
+// TestReplaceAll_RefusedOnReadOnly mirrors
+// TestReplaceCurrentMatch_RefusedOnReadOnly for the all-at-once path.
+func TestReplaceAll_RefusedOnReadOnly(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("foo foo")
+	tab.Mode = diffMode
+	tab.SetFindQuery("foo")
+	if n := tab.ReplaceAll("X"); n != 0 {
+		t.Fatalf("expected 0 replacements on a read-only tab, got %d", n)
+	}
+	if got := tab.Buffer.Lines[0]; got != "foo foo" {
+		t.Fatalf("buffer should be untouched, got %q", got)
+	}
+}
