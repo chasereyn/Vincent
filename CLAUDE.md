@@ -60,6 +60,23 @@ tests and merged by hand. **The first thing to do next session is run it
 and look.** Then phases 3b (git writes, root switcher), 6b (find/replace,
 new file), 7 (markdown), 8, 9.
 
+- **Phase 7, markdown.** `internal/markdown` wraps goldmark into a pure
+  row model — `[]Row`, each a slice of styled `Span`s (`Text`,
+  `Heading1..3`, `Bold`, `Italic`, `Code`, `CodeBlock`, `Link`,
+  `ListMarker`, `Quote`, `Rule`, `TableBorder`, `TableHeader`) — with no
+  tcell import, mirroring `internal/diff`'s split. `editor/markdownview.go`
+  paints it as a new `Tab.Mode`: headings bold in `theme.Accent`, fenced
+  code boxed in `theme.ReviewBoxBG` and Chroma-highlighted through the new
+  `HighlightLang` (resolves a fence's language tag by name, not by the
+  fake file extension `Highlight` would need), links underlined in
+  `theme.SynProperty`, quotes and table borders in `theme.Subtle`. A `.md`
+  file opens rendered by default (`editor.NewTab` dispatches to
+  `NewMarkdownTab` the way it already dispatches images); `Esc m`
+  (`Tab.ToggleMarkdownView`) swaps the same tab to the ordinary editable
+  raw-text view and back, preserving scroll position as a fraction of the
+  document and previewing whatever is currently in the buffer — an
+  unsaved raw-mode edit included. A rendered tab re-renders itself when
+  the file changes on disk, the same way a diff tab does.
 - **Phase 3, the review loop.** `internal/review` holds the note model,
   the wire format, and the herdr client. A diff tab grows overlay rows for
   the inline composer and for saved-note markers (`editor/diffoverlay.go`).
@@ -129,7 +146,7 @@ What the editor is missing, from `docs/research/2026-09-02/02-editor.md`:
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        2761  Event loop, layout rects, mouse dispatch, rendering
+internal/app/app.go        2819  Event loop, layout rects, mouse dispatch, rendering
 internal/app/modals.go     1257  Modal scaffolding; dirty/conflict buttons are data
 internal/app/review.go     1130  Composer, saved-note markers, footer batch, send/copy
 internal/app/gitpanel.go    516  The Changes panel: layout, rows, clicks, review footer
@@ -141,16 +158,19 @@ internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
 internal/app/frame.go       219  frameKey: skip the repaint when motion changed nothing
 internal/app/gitpoll.go     202  The 10s git refresh on a worker -> gitPollEvent
 internal/app/conflict.go    179  Overwrite / Reload / Cancel / Show diff prompt
-internal/app/cheatsheet.go  220  The Esc-? key table, generated from leader.go
+internal/app/cheatsheet.go  363  The Esc-? key table, generated from leader.go; cheatsheetFit compresses it to fit a short screen
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
-internal/app/leader.go      192  Esc key bindings + hints; leaderRows is THE key list
+internal/app/leader.go      199  Esc key bindings + hints; leaderRows is THE key list
 internal/app/reviewlog.go    ~60 review.Logf -> ~/.config/vincent/herdr.log
+internal/app/markdownview.go 78  Esc-m dispatch, reconcile a rendered tab on disk change
 internal/review/review.go   335  Comment, Batch, Render (wire format), Sanitize/Wrap
 internal/review/herdr.go    239  herdr agent list / pane send-text / agent focus
-internal/editor/tab.go      985  Tab: buffer, cursor, scroll, hit-test, Conflict
+internal/editor/tab.go     1042  Tab: buffer, cursor, scroll, hit-test, Conflict
 internal/editor/diffview.go 411  Diff render: dual gutters, row + word tints, overlays
 internal/editor/diffoverlay.go 204 Rows the app grows into a diff (composer, markers)
-internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid
+internal/editor/markdownview.go 408 Markdown render: headings, boxed/highlighted code, links, toggle raw<->rendered
+internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid; HighlightLang resolves by fence language name
+internal/markdown           873  Row model: goldmark AST -> styled Span rows, no tcell — mirrors internal/diff
 internal/filetree           736  Lazy tree, refresh, guides, hover, CollapseAll
 internal/finder             583  Filename index (git ls-files) + fzy-style scorer
 internal/diff               364  Unified-diff parser — no tcell, no git, pure
@@ -398,7 +418,7 @@ starting its phase.
 | 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | **done** |
 | 6a | Editor safety: bracketed paste, conflict model | **done** |
 | 6b | Editor: find/replace, new file, save-as, Myers diff | |
-| 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | |
+| 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | **done** |
 | 8 | Multi-repo workspace + content search | |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | |
 
