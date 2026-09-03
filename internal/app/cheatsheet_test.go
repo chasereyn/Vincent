@@ -326,32 +326,36 @@ func TestCheatsheetFit_TallScreenKeepsIdealLayout(t *testing.T) {
 }
 
 // TestCheatsheetFit_ShortScreenDropsDividersBeforeColumns is the loose
-// end itself: on an 80x24 terminal the ideal layout (27 rows) clips, but
-// dropping the divider rows alone is enough to fit within height minus
-// the two-row margin — so the fix must choose that tier, a single
-// column, rather than jumping straight to two columns.
+// end itself: on a screen too short for the ideal layout but tall enough
+// for the rows alone, the fix must drop the divider rows and stay in one
+// column rather than jumping straight to two. The screen height is derived
+// from the live table so the test survives every new binding — 80x24 was
+// the original fixture, and round 3's six new keys pushed the divider-free
+// column past 22 rows, which is exactly the kind of drift a hardcoded
+// height turns into a false failure.
 func TestCheatsheetFit_ShortScreenDropsDividersBeforeColumns(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
-	resizeTestApp(t, a, 80, 24)
-
-	_, _, idealHeight := a.cheatsheetLayout()
-	if idealHeight <= 24-2 {
-		t.Fatalf("fixture assumption broken: ideal height %d already fits in 24 rows minus the margin", idealHeight)
+	_, dividers, idealHeight := a.cheatsheetLayout()
+	if len(dividers) == 0 {
+		t.Fatalf("fixture assumption broken: the layout has no dividers to drop")
 	}
+	// Exactly enough room for the rows without their dividers.
+	screenH := idealHeight - len(dividers) + 2
+	resizeTestApp(t, a, 80, screenH)
 
 	plan := a.cheatsheetFit()
 	if len(plan.cols) != 1 {
-		t.Fatalf("cols = %d, want 1 — dropping dividers alone should fit 80x24, no need for columns", len(plan.cols))
+		t.Fatalf("cols = %d, want 1 — dropping dividers alone should fit %d rows, no need for columns", len(plan.cols), screenH)
 	}
 	if len(plan.dividers[0]) != 0 {
 		t.Fatalf("dividers = %v, want none — they should have been dropped to fit", plan.dividers[0])
 	}
-	if plan.height > 24-2 {
-		t.Fatalf("height = %d, want it to fit within screen height minus 2 (22)", plan.height)
+	if plan.height > screenH-2 {
+		t.Fatalf("height = %d, want it to fit within screen height minus 2 (%d)", plan.height, screenH-2)
 	}
 	mx, my, mw, mh := a.cheatsheetRect()
 	if mx+mw > a.width || my+mh > a.height {
-		t.Fatalf("modal rect (%d,%d,%d,%d) overflows an 80x24 screen", mx, my, mw, mh)
+		t.Fatalf("modal rect (%d,%d,%d,%d) overflows an 80x%d screen", mx, my, mw, mh, screenH)
 	}
 	allCheatsheetRowsCovered(t, plan)
 
@@ -364,10 +368,40 @@ func TestCheatsheetFit_ShortScreenDropsDividersBeforeColumns(t *testing.T) {
 	text := screenText(a)
 	for _, r := range plan.cols[0] {
 		if !strings.Contains(text, "Esc "+r.key) {
-			t.Errorf("80x24 cheatsheet is missing key label %q", "Esc "+r.key)
+			t.Errorf("short-screen cheatsheet is missing key label %q", "Esc "+r.key)
 		}
 		if !strings.Contains(text, r.hint) {
-			t.Errorf("80x24 cheatsheet is missing hint %q", r.hint)
+			t.Errorf("short-screen cheatsheet is missing hint %q", r.hint)
+		}
+	}
+}
+
+// TestCheatsheetFit_80x24FitsWhateverTheTier pins the user-facing promise
+// behind the loose end without caring which tier delivers it: on a 24-row
+// terminal the cheatsheet fits inside the screen and every binding is
+// drawn. With 24 bindings today that means two columns; with fewer it was
+// one. Either is fine, clipping is not.
+func TestCheatsheetFit_80x24FitsWhateverTheTier(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	resizeTestApp(t, a, 80, 24)
+	plan := a.cheatsheetFit()
+	if plan.height > 22 {
+		t.Fatalf("height = %d, want <= 22 on a 24-row screen", plan.height)
+	}
+	mx, my, mw, mh := a.cheatsheetRect()
+	if mx < 0 || my < 0 || mx+mw > a.width || my+mh > a.height {
+		t.Fatalf("modal rect (%d,%d,%d,%d) overflows an 80x24 screen", mx, my, mw, mh)
+	}
+	allCheatsheetRowsCovered(t, plan)
+	a.openCheatsheet()
+	a.draw()
+	a.screen.Show()
+	text := screenText(a)
+	for _, col := range plan.cols {
+		for _, r := range col {
+			if !strings.Contains(text, "Esc "+r.key) {
+				t.Errorf("80x24 cheatsheet is missing key label %q", "Esc "+r.key)
+			}
 		}
 	}
 }
