@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.5.0`
+- Version: `internal/version/version.go`, currently `0.6.0`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -58,8 +58,9 @@ into the agent's prompt. Version 0.4.0 followed the first real session
 (menu removed, `Esc ?`, `Esc o`, `Esc z`, wider tree, folder glyphs).
 Phases 3b (git writes), 6b (find/replace, new file, save-as,
 triple-click, Enter indent) and 7 (markdown) landed on 2026-09-03 as
-version 0.5.0 and have not been seen on a real terminal. Phase 8a
-(multi-repo) followed on the same day. Then 8b (content search) and 9.
+version 0.5.0. Phase 8 (multi-repo, `Esc F` content search, in-process
+Myers diff) followed the same day as 0.6.0. None of 0.5.0 or 0.6.0 has
+been seen on a real terminal. Phase 9, shipping, is what remains.
 
 - **Phase 8a, multi-repo.** The root does not have to be a repository any
   more. `internal/repos` discovers every repo at or under it and
@@ -518,7 +519,7 @@ starting its phase.
 | 6a | Editor safety: bracketed paste, conflict model | **done** |
 | 6b | Editor: find/replace, new file, save-as, triple-click line select, Enter carries indent | **done** |
 | 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | **done** |
-| 8 | Multi-repo workspace + content search | **8a done**, content search is 8b |
+| 8 | Multi-repo workspace + content search (`Esc F`) + in-process Myers diff | **done**, unseen on a real terminal |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | |
 
 **Phase 8 is still wanted; do not trim it because `Esc o` exists.** Confirmed
