@@ -453,8 +453,9 @@ wants a whole screen; `herdr/open.sh` toggles it. Linux and macOS only:
 herdr cannot spawn a relative pane command on Windows. Vincent reads
 `HERDR_ENV`, `HERDR_WORKSPACE_ID`, and `HERDR_PANE_ID` from the pane's
 environment, which is what lets `Esc Enter` find the agent in the same
-workspace. The marketplace lists only PUBLIC repos with the `herdr-plugin`
-topic; the topic is set, the repo is still private.
+workspace. The marketplace lists only public repos with the `herdr-plugin`
+topic; the repo went public with the topic set on 2026-09-03, so it is
+listed. Chase confirmed the plugin works from inside herdr the same day.
 
 ## Shipping
 
