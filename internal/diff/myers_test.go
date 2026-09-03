@@ -46,8 +46,8 @@ func reconstructSide(rows []Row, old bool, hasTrailingNL bool) string {
 // produces.
 func TestUnified_RoundTrip(t *testing.T) {
 	cases := []struct {
-		name        string
-		old, new    string
+		name         string
+		old, new     string
 		oldNL, newNL bool
 	}{
 		{"insert at start", "b\nc\n", "a\nb\nc\n", true, true},
