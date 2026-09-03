@@ -1,24 +1,141 @@
 # Vincent
 
-**A read-only, mouse-first terminal client for reviewing code that AI agents wrote.**
+A mouse-first terminal client for reviewing code that AI agents wrote, and
+correcting it in place. Vincent van *Go*.
 
-Vincent van *Go*.
+![Vincent reviewing a diff](docs/screenshot.png)
 
-Your agent writes the code. Vincent shows you what changed, lets you click
-lines and leave review notes, and hands those notes straight back to the
-agent — without leaving the terminal. One static binary, pure black, mouse
-everywhere.
+Your agent writes the code. Vincent shows you the diff, you click a line
+and leave a note, and one keypress drops those notes back into the
+agent's prompt. When a fix is smaller than a note, you type it yourself.
 
-It is not an editor. There is no insert mode, no save, no undo. If you want
-to change a line, tell the agent.
+## What it does
 
-## Status
+- A file tree, and a Zed-shaped **Changes panel** that lists every
+  tracked and untracked file, grouped by repository when you point
+  Vincent at a folder of repos.
+- **Inline diffs**: dual old/new gutters, `±` markers, and a darker
+  word-level tint on just the part of a line that changed.
+- **Review notes** that click onto a diff line and land in the agent's
+  prompt through [herdr](https://github.com/herdrdev/herdr), or on the
+  system clipboard when there's no pane to send to.
+- A small real **editor** — type, select, undo, find and replace, save —
+  with a conflict check that refuses to overwrite a file the agent
+  rewrote out from under you.
+- Rendered **markdown**, toggled per tab.
+- **Find in files** across the project.
+- Four blunt git writes: save a buffer, `git checkout` a branch,
+  commit everything tracked and untracked in one shot, `git push`.
+  Nothing finer — no staging, no amend, no rebase. That's lazygit's job.
 
-**Phase 1.** Inline diffs work. The fork builds, the test suite is green on
-Linux, macOS, and Windows, and every surface is black. The review notes and
-the git panel are still ahead — see the roadmap.
+## The review loop
+
+`Esc r` on a diff line opens a small composer. Cycle its kind with Tab —
+issue, suggestion, question, praise, or none — write a note, and it joins
+the batch in the git panel's footer. `Esc ⏎` sends the whole batch to the
+agent; `Esc y` copies it to the clipboard instead.
+
+A note never touches the source. What it anchors to is a frozen snippet
+of the diff, captured the moment you wrote the note, so the batch stays
+true to what you actually reviewed even after the agent rewrites the
+file and the line numbers move on.
+
+This is what a batch looks like once it reaches the agent:
+
+```
+Please address these review comments.
+Comment kinds: ISSUE (must fix), SUGGESTION (consider)
+
+## Comments
+
+1. **[ISSUE]** `internal/app/gitpanel.go:214`
+   +	if len(entries) == 0 {
+   this drops the empty-repo case; the header should still say Changes (0)
+
+2. **[SUGGESTION]** `internal/app/gitpanel.go:240-244`
+   +	for _, e := range entries {
+   +		rows = append(rows, row(e))
+   +	}
+   could be a single append with a mapped slice, but not blocking
+```
+
+## Keys
+
+Press `Esc` to arm the leader — you have 1.5 seconds to press one more
+key before it disarms. `Esc` again cancels. There are no `Ctrl+`
+shortcuts; they fight tmux and terminal emulators. `Esc ?` shows this
+same table inside the app, generated from the same source, so it can
+never drift out of date. A few actions also live on the right-click
+menu, but every one of them is on this list too — right-click is a
+redundant path, never the only one.
+
+**Review**
+
+| Key | Does |
+|---|---|
+| `Esc d` | Diff |
+| `Esc e` | Open file |
+| `Esc r` | Note |
+| `Esc y` | Copy review |
+| `Esc g` | Changes |
+| `Esc ⏎` | Send |
+
+**Git**
+
+| Key | Does |
+|---|---|
+| `Esc c` | Commit |
+| `Esc P` | Push |
+| `Esc b` | Branch |
+
+**Search**
+
+| Key | Does |
+|---|---|
+| `Esc p` | Find file |
+| `Esc /` | Find |
+| `Esc F` | Find in files |
+
+**View**
+
+| Key | Does |
+|---|---|
+| `Esc f` | Explorer |
+| `Esc t` | Tab bar |
+| `Esc z` | Fold all |
+| `Esc m` | Markdown |
+| `Esc o` | Root |
+
+**Edit**
+
+| Key | Does |
+|---|---|
+| `Esc s` | Save |
+| `Esc S` | Save as |
+| `Esc n` | New file |
+| `Esc u` | Undo |
+| `Esc U` | Redo |
+| `Esc a` | Select all |
+
+**Session**
+
+| Key | Does |
+|---|---|
+| `Esc w` | Close |
+| `Esc q` | Quit |
+| `Esc ?` | Keys |
 
 ## Install
+
+```sh
+go install github.com/chasereyn/vincent@latest
+```
+
+Or download a binary from the
+[Releases page](https://github.com/chasereyn/vincent/releases):
+`vincent-darwin-arm64`, `vincent-linux-amd64`, `vincent-windows-amd64.exe`.
+
+Or clone and build:
 
 ```sh
 git clone https://github.com/chasereyn/vincent
@@ -26,107 +143,84 @@ cd vincent
 make install        # builds, then copies to ~/.local/bin
 ```
 
-`make build` alone leaves the binary at `./bin/vincent` (`.exe` on Windows)
-if you'd rather place it yourself. Override the destination with
-`make install INSTALL_DIR=/usr/local/bin`.
-
-Requires Go 1.24+ and `git` on PATH. No cgo, no runtime, no external
-rendering tools.
-
-## Use
+**macOS**: the release binary is unsigned. On first launch, macOS
+quarantines it; clear that with:
 
 ```sh
-vincent                     # open the current directory
-vincent <directory>         # open a project, or a folder of projects
-vincent <file>              # open a file; its parent becomes the root
+xattr -d com.apple.quarantine ./vincent-darwin-arm64
 ```
 
-Point it at **a repository**, not a folder of repositories — until phase 4
-lands, git features resolve against the directory you opened, so a parent
-folder gives you a file tree and nothing else.
+Requires Go 1.24+ and `git` on PATH to build. No cgo, no runtime, no
+external rendering tools at run time.
 
-Press `Esc ?` — or right-click on empty space — for the key table. There
-are no `Ctrl+` shortcuts on purpose: they fight tmux and terminal
-emulators. Every command is an `Esc`-prefixed leader key.
+Vincent's review handoff prefers [herdr](https://github.com/herdrdev/herdr),
+a terminal multiplexer for agent panes. Without it — or without an agent
+pane running — `Esc ⏎` falls back to copying the review batch onto the
+system clipboard instead of delivering it directly.
 
-| | |
-|---|---|
-| `Esc ?` | **The key table — every binding, always** |
-| `Esc d` | **Diff the active file** |
-| `Esc r` | Add a review note on the diff line |
-| `Esc ⏎` | Send the review batch to the agent |
-| `Esc y` | Copy the review batch to the clipboard |
-| `Esc g` | **Show / hide the Changes panel** |
-| `Esc p` | Find file by name |
-| `Esc /` | Find in file |
-| `Esc f` | Show / hide the file explorer |
-| `Esc t` | Show / hide the tab bar |
-| `Esc z` | Fold every folder in the tree |
-| `Esc s` | Save |
-| `Esc u` / `Esc U` | Undo / redo |
-| `Esc a` | Select all |
-| `Esc w` | Close tab |
-| `Esc q` | Quit |
+## Config
 
-Mouse: click a file to open it, click a tab to switch, click `×` to close,
-drag the splitter to resize the tree, scroll anywhere. Click a change bar
-in the gutter to jump straight into that change in the diff.
+`~/.config/vincent/config.json`, all keys optional:
 
-### The Changes panel
+```json
+{
+  "icons": "auto",
+  "tabBar": false,
+  "recentRoots": []
+}
+```
 
-`Esc g` opens a read-only git panel down the right: a `Changes (N)` header,
-Tracked and Untracked sections, and one row per changed file — filename in
-its status colour, parent directory dimmed beside it so two files called
-`index.ts` are still distinguishable. Deleted files are struck through.
-Click any row to open its diff. The footer names the repo and branch.
+- `icons` — `"auto"` (default) detects a Nerd Font at startup; `"on"` /
+  `"off"` force it either way.
+- `tabBar` — show the full tab strip. Default `false`: with one tab open,
+  row 0 just names it until you turn the strip on.
+- `recentRoots` — folders `Esc o` offers, most recent first. Vincent
+  rewrites this on every root switch; entries that no longer exist are
+  dropped on load.
 
-It is a navigator, not a stager. There are no checkboxes, no Stage All, and
-no commit box; writes belong to lazygit. Where Zed puts "describe this
-change and commit it", Vincent will put "describe this change and hand it
-back to the agent".
+Failed herdr sends log their full error to `~/.config/vincent/herdr.log`
+rather than the terminal, which a raw-mode TUI would otherwise paint over.
 
-### Diffs
+## Design rules
 
-`Esc d` opens the active file's diff — inline, VS Code / Zed shaped: old
-and new line numbers side by side, `±` markers, red and green row tints,
-and a darker tint over just the characters that changed on a line edited in
-place. Code inside a diff is syntax-highlighted like code anywhere else.
+- `#030405` background, set explicitly, never inherited from the
+  terminal.
+- Ayu Darker palette, matched to one specific Zed setup.
+- Mouse first: click, drag, and scroll work everywhere; keyboard is the
+  supplement.
+- Single static binary — no cgo, no runtime, nothing shelled out to at
+  run time except `git` and `herdr`.
+- Four writes, all blunt, and nothing finer.
+- `Esc` leader only, no `Ctrl+` chords, no menu.
 
-You can also click a change bar in the editor's git gutter, which opens the
-diff scrolled to that change, or right-click a file in the tree.
+## Provenance
 
-A diff tab keeps itself current: when the agent writes to the file again,
-the diff re-runs in place without losing your scroll position. Staged and
-unstaged changes both show — the view is everything that has happened since
-the last commit.
+Forked from [spice-edit](https://github.com/cloudmanic/spice-edit)
+(Cloudmanic, LLC, MIT). Upstream file headers keep their original
+authorship — that's the MIT attribution requirement, not a leftover.
 
-## Roadmap
+Shaped by reading, not copying, these projects:
+[herdr](https://github.com/herdrdev/herdr) — the pane-send handoff.
+[tuicr](https://github.com/agavra/tuicr) — the review-note wire format.
+[herdr-sidebar](https://github.com/alexarthurs/herdr-sidebar) — the inline
+diff renderer's origin. [herdr-reviewr](https://github.com/persiyanov/herdr-reviewr)
+— the herdr client and its error handling. [lazygit](https://github.com/jesseduffield/lazygit)
+— why Vincent's git writes stop at four. [Zed](https://github.com/zed-industries/zed)
+— the Changes panel's shape and the palette.
 
-| Phase | What | Status |
-|---|---|---|
-| 0 | Fork, strip, blacken | ✅ |
-| 1 | Inline diff viewer | ✅ |
-| 2 | Read-only git panel | ✅ |
-| 3 | Review notes + handoff back to the agent | next |
-| 4 | Multi-repo workspace | |
-| 5 | Content search + markdown rendering | |
+## Contributing
 
-The intended shape: point Vincent at a folder containing many repos, click
-any file, and the git panel follows — the active repo is derived from the
-active file rather than chosen from a switcher.
-
-## Built on spice-edit
-
-Vincent is a fork of [spice-edit](https://github.com/cloudmanic/spice-edit)
-by Spicer Matthews (MIT, Copyright 2026 Cloudmanic, LLC), a mouse-first
-terminal *editor*. Vincent keeps its tcell shell, file tree, fuzzy finder,
-Chroma highlighting, and mouse handling — including a pile of hard-won
-terminal-quirk fixes — and deletes the half that exists so a human can type
-into a file.
-
-Thanks to that project for the foundation. See `CLAUDE.md` for exactly what
-was removed and why.
+This is a personal tool, built for one person's review workflow. See
+[CONTRIBUTING.md](CONTRIBUTING.md): pull requests are closed
+automatically, bug reports are welcome, forks are welcome.
 
 ## License
 
-MIT. See `LICENSE`, which retains the upstream copyright.
+MIT.
+
+```
+Copyright (c) 2026 Chase Reynolds.
+Copyright (c) 2026 Cloudmanic, LLC. (spice-edit, from which this is forked)
+```
+
+See [LICENSE](LICENSE) for the full text.
