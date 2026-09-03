@@ -275,13 +275,7 @@ func requireGit(t *testing.T) {
 func initRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	gitRun(t, dir, "init", "-q")
-	gitRun(t, dir, "config", "user.email", "test@example.com")
-	gitRun(t, dir, "config", "user.name", "Test User")
-	gitRun(t, dir, "config", "commit.gpgsign", "false")
-	// macOS 'git init' may print a default-branch hint; force a stable name
-	// so the tests work the same on every host.
-	gitRun(t, dir, "checkout", "-q", "-b", "main")
+	initRepoAt(t, dir)
 	// On macOS the temp dir lives under /var, which is a symlink to
 	// /private/var. git resolves the real path; rev-parse --show-toplevel
 	// will report /private/var/... — tests use the same dir variable so
@@ -291,6 +285,22 @@ func initRepo(t *testing.T) string {
 		t.Fatalf("evalsymlinks: %v", err)
 	}
 	return resolved
+}
+
+// initRepoAt is initRepo's body for a directory the caller already made —
+// which is what the multi-repo fixtures need, since they build several
+// repos inside ONE t.TempDir rather than one repo per temp dir. It does no
+// symlink resolution: the caller resolved the parent once and every path
+// below it is already physical.
+func initRepoAt(t *testing.T, dir string) {
+	t.Helper()
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "config", "user.email", "test@example.com")
+	gitRun(t, dir, "config", "user.name", "Test User")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	// macOS 'git init' may print a default-branch hint; force a stable name
+	// so the tests work the same on every host.
+	gitRun(t, dir, "checkout", "-q", "-b", "main")
 }
 
 // gitRun invokes git in cwd. Fails the test on non-zero exit so a broken
