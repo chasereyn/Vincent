@@ -904,6 +904,14 @@ func (a *App) reconcileOpenTabsWithDisk(files map[string]gitPollFile) {
 			a.reconcileDiffTab(tab, polled)
 			continue
 		}
+		if tab.IsMarkdown() {
+			// Same reasoning as the diff branch above: a rendered tab has
+			// no buffer to reload and nothing that can go dirty, so it
+			// gets its own reconcile rather than falling into the
+			// dirty/conflict logic below. See markdownview.go.
+			a.reconcileMarkdownTab(tab, polled)
+			continue
+		}
 		if tab.IsImage() {
 			continue
 		}
@@ -2833,8 +2841,26 @@ func (a *App) drawStatusBar() {
 			// ahead of the position readout a file tab shows.
 			added, deleted := tab.DiffStats()
 			left = fmt.Sprintf(" Diff · +%d −%d · %s", added, deleted, filepath.Base(tab.Path))
+		} else if tab.IsMarkdown() {
+			// Rendered is read-only, so there is no Ln/Col to show — the
+			// dirty dot still matters, since Esc m -> raw -> edit ->
+			// Esc m -> rendered leaves unsaved changes a reviewer needs
+			// to know about even while looking at the pretty version.
+			dirty := ""
+			if tab.Dirty {
+				dirty = " · ●"
+			}
+			left = fmt.Sprintf(" Markdown · rendered · %d lines%s · %s",
+				tab.Buffer.LineCount(), dirty, filepath.Base(tab.Path))
 		} else {
 			lang := detectLangLabel(tab.Path)
+			mode := ""
+			if editor.IsMarkdownExt(tab.Path) {
+				// Esc m's other half: a .md tab currently showing raw
+				// text, so the mirror-image reviewer question — "which
+				// view am I looking at" — has an answer here too.
+				mode = " · raw"
+			}
 			dirty := ""
 			switch {
 			case tab.Conflict:
@@ -2845,8 +2871,8 @@ func (a *App) drawStatusBar() {
 			case tab.Dirty:
 				dirty = " · ●"
 			}
-			left = fmt.Sprintf(" %s · Ln %d, Col %d · %d lines%s",
-				lang, tab.Cursor.Line+1, tab.Cursor.Col+1, tab.Buffer.LineCount(), dirty)
+			left = fmt.Sprintf(" %s%s · Ln %d, Col %d · %d lines%s",
+				lang, mode, tab.Cursor.Line+1, tab.Cursor.Col+1, tab.Buffer.LineCount(), dirty)
 		}
 	} else {
 		left = " " + filepath.Base(a.rootDir)

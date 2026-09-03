@@ -87,16 +87,137 @@ func cheatsheetRowY(rows []leaderRow, i int) int {
 	return y
 }
 
+// cheatsheetFitPlan is how the Esc-? modal actually lays out on the
+// current screen, as opposed to cheatsheetLayout's ideal, uncompressed
+// shape. cols holds one row slice per column (len 1 unless the table had
+// to spread sideways to fit); dividers holds the matching per-column
+// divider offsets, empty for a column whose dividers were dropped to
+// save height. width and height are the modal's final size.
+type cheatsheetFitPlan struct {
+	cols     [][]leaderRow
+	dividers [][]int
+	width    int
+	height   int
+}
+
+// cheatsheetMinAvailHeight is the shortest a screen's usable height
+// (screen height minus the two-row margin every tier targets) is ever
+// treated as. Below this, two columns of even a handful of bindings
+// still won't fit — there is no fourth tier, so the plan is left at its
+// most-compressed shape and the painter's own bounds-tolerant SetContent
+// calls do the rest, exactly as cheatsheetRect's doc comment already
+// promises for an over-tall table.
+const cheatsheetMinAvailHeight = 1
+
+// cheatsheetFit resolves cheatsheetLayout's ideal single-column shape
+// against the screen Vincent actually has, in three tiers, each tried
+// only if the one before it didn't fit within height minus a two-row
+// margin:
+//
+//  1. The ideal layout: one column, a divider under the title and
+//     between every group.
+//  2. The same column with every divider dropped — a blank separator
+//     row is the cheapest thing to give up, since losing it costs
+//     legibility, not content.
+//  3. Two columns, splitting whole groups between them (never a group's
+//     rows) so the table spreads sideways instead of scrolling.
+//
+// A 24-row terminal is a real target, not a hypothetical: CLAUDE.md's
+// leader-hint work already treats it as one, and the cheatsheet renders
+// on the same screen.
+func (a *App) cheatsheetFit() cheatsheetFitPlan {
+	rows, dividers, height := a.cheatsheetLayout()
+	availH := a.height - 2
+	if availH < cheatsheetMinAvailHeight {
+		availH = cheatsheetMinAvailHeight
+	}
+
+	if height <= availH {
+		return cheatsheetFitPlan{
+			cols:     [][]leaderRow{rows},
+			dividers: [][]int{dividers},
+			width:    cheatsheetWidth,
+			height:   height,
+		}
+	}
+
+	noDividerHeight := height - len(dividers)
+	if noDividerHeight <= availH {
+		return cheatsheetFitPlan{
+			cols:     [][]leaderRow{rows},
+			dividers: [][]int{nil},
+			width:    cheatsheetWidth,
+			height:   noDividerHeight,
+		}
+	}
+
+	left, right := splitRowsByGroup(rows)
+	colH := len(left)
+	if len(right) > colH {
+		colH = len(right)
+	}
+	colW := cheatsheetWidth
+	if maxW := (a.width - 1) / 2; maxW > 0 && maxW < colW {
+		colW = maxW
+	}
+	return cheatsheetFitPlan{
+		cols:     [][]leaderRow{left, right},
+		dividers: [][]int{nil, nil},
+		width:    colW*2 + 1, // two columns plus the divider between them.
+		height:   colH + 3,   // top border + title, the rows, bottom border.
+	}
+}
+
+// splitRowsByGroup divides rows into two roughly-balanced halves without
+// ever cutting a group across the split — a group reads as one unit, so
+// "Review" appearing at the bottom of the left column and the top of the
+// right would be more confusing than the two-column layout it's meant to
+// fix. Groups are assigned to the left column until it holds at least
+// half the total rows, then the rest go right; for the row counts any
+// realistic leader table has, this keeps the two columns close in height
+// without needing an exact bin-packing search.
+func splitRowsByGroup(rows []leaderRow) (left, right []leaderRow) {
+	target := (len(rows) + 1) / 2
+	i := 0
+	for i < len(rows) {
+		j := i + 1
+		for j < len(rows) && rows[j].group == rows[i].group {
+			j++
+		}
+		if len(left) < target {
+			left = append(left, rows[i:j]...)
+		} else {
+			right = append(right, rows[i:j]...)
+		}
+		i = j
+	}
+	return left, right
+}
+
+// cheatsheetColRowY returns the screen-relative Y offset of row index i
+// within one column, given that column's own row slice and surviving
+// dividers. A non-empty dividers slice means the ideal group-divider
+// spacing from cheatsheetRowY applies; an empty one (dividers dropped, or
+// a two-column split, which never keeps them) means every row sits
+// directly under the previous one starting right below the title.
+func cheatsheetColRowY(rows []leaderRow, dividers []int, i int) int {
+	if len(dividers) == 0 {
+		return 2 + i
+	}
+	return cheatsheetRowY(rows, i)
+}
+
 // cheatsheetRect returns the modal's on-screen rectangle, centred in the
-// window. Height comes from the layout so a binding added to leader.go
-// grows the modal automatically. The origin clamps at (0, 0) rather than
-// going negative on a window too small to hold the table — the painter is
-// bounds-tolerant (tcell drops out-of-range SetContent), so an over-tall
-// table on a 24-row terminal loses its last rows rather than corrupting
-// the frame.
+// window. Size comes from cheatsheetFit, so a binding added to leader.go
+// grows the modal automatically, and a screen too short or narrow for the
+// ideal layout gets a compressed one instead of an off-screen one. The
+// origin still clamps at (0, 0) for whatever the fit couldn't make fit —
+// the painter is bounds-tolerant (tcell drops out-of-range SetContent),
+// so a table wider or taller than the screen loses its edge rather than
+// corrupting the frame.
 func (a *App) cheatsheetRect() (x, y, w, h int) {
-	w = cheatsheetWidth
-	_, _, h = a.cheatsheetLayout()
+	plan := a.cheatsheetFit()
+	w, h = plan.width, plan.height
 	x = (a.width - w) / 2
 	y = (a.height - h) / 2
 	if x < 0 {
@@ -147,14 +268,17 @@ func (a *App) handleCheatsheetMouse(_, _ int, btn tcell.ButtonMask) {
 
 // drawCheatsheet paints the key table centred in the window: a bordered
 // panel, a title row, one row per leader binding as "Esc <key>  <hint>",
-// dividers between groups, and the version stamped into the bottom border.
+// dividers between groups (when they fit — see cheatsheetFit), and the
+// version stamped into the bottom border. A screen too short for the
+// ideal layout gets it with the dividers dropped; one too short even for
+// that gets two side-by-side columns instead of clipping.
 //
 // The version is here because the ≡ menu's footer used to carry it and
 // there is no auto-update: `vincent --version` and this footer are the only
 // two ways to tell whether the binary on PATH is the one just built.
 func (a *App) drawCheatsheet() {
 	mx, my, mw, mh := a.cheatsheetRect()
-	rows, dividers, _ := a.cheatsheetLayout()
+	plan := a.cheatsheetFit()
 
 	bg := a.theme.LineHL
 	bgStyle := tcell.StyleDefault.Background(bg).Foreground(a.theme.Text)
@@ -185,13 +309,17 @@ func (a *App) drawCheatsheet() {
 		a.screen.SetContent(mx+mw-1, cy, '│', nil, borderStyle)
 	}
 
-	// Group dividers, including the always-on one under the title.
-	for _, dy := range dividers {
-		cy := my + dy
-		a.screen.SetContent(mx, cy, '├', nil, borderStyle)
-		a.screen.SetContent(mx+mw-1, cy, '┤', nil, borderStyle)
-		for cx := mx + 1; cx < mx+mw-1; cx++ {
-			a.screen.SetContent(cx, cy, '─', nil, borderStyle)
+	// Group dividers survive only in the ideal, single-column tier — see
+	// cheatsheetFit. Two columns draw a vertical rule between them
+	// instead, further down.
+	if len(plan.cols) == 1 {
+		for _, dy := range plan.dividers[0] {
+			cy := my + dy
+			a.screen.SetContent(mx, cy, '├', nil, borderStyle)
+			a.screen.SetContent(mx+mw-1, cy, '┤', nil, borderStyle)
+			for cx := mx + 1; cx < mx+mw-1; cx++ {
+				a.screen.SetContent(cx, cy, '─', nil, borderStyle)
+			}
 		}
 	}
 
@@ -209,11 +337,26 @@ func (a *App) drawCheatsheet() {
 		drawAt(a.screen, verX, my+mh-1, verLabel, mutedStyle)
 	}
 
-	for i, r := range rows {
-		cy := my + cheatsheetRowY(rows, i)
-		drawAt(a.screen, mx+2, cy, "Esc "+r.key, keyStyle)
-		hintMax := mw - cheatsheetHintCol - 2
-		drawAt(a.screen, mx+cheatsheetHintCol, cy, trimRunes(r.hint, hintMax), bgStyle)
+	// Column width: the full modal for one column, half of it (minus the
+	// vertical rule between them) for two.
+	colW := mw
+	if len(plan.cols) == 2 {
+		colW = (mw - 1) / 2
+	}
+	for c, rows := range plan.cols {
+		colX := mx + c*(colW+1)
+		if c > 0 {
+			for cy := my + 1; cy < my+mh-1; cy++ {
+				a.screen.SetContent(colX-1, cy, '│', nil, borderStyle)
+			}
+		}
+		dividers := plan.dividers[c]
+		for i, r := range rows {
+			cy := my + cheatsheetColRowY(rows, dividers, i)
+			drawAt(a.screen, colX+2, cy, "Esc "+r.key, keyStyle)
+			hintMax := colW - cheatsheetHintCol - 2
+			drawAt(a.screen, colX+cheatsheetHintCol, cy, trimRunes(r.hint, hintMax), bgStyle)
+		}
 	}
 
 	a.screen.HideCursor()

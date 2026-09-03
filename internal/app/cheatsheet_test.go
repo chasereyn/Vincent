@@ -256,3 +256,204 @@ func TestOpenCheatsheet_ClosesOtherModals(t *testing.T) {
 		t.Fatal("anyModalOpen must count the cheatsheet")
 	}
 }
+
+// resizeTestApp sets the fixture's simulation screen to w x h and updates
+// the App's own cached width/height, the way a real resize event would —
+// tests that probe layout at a specific screen size all need this rather
+// than just calling scr.SetSize, since a.width/a.height (not the screen)
+// are what the layout helpers actually read.
+func resizeTestApp(t *testing.T, a *App, w, h int) {
+	t.Helper()
+	scr := a.screen.(tcell.SimulationScreen)
+	scr.SetSize(w, h)
+	a.width, a.height = scr.Size()
+}
+
+// allCheatsheetRowsCovered walks every row cheatsheetFit's plan actually
+// places and confirms every real leader binding shows up exactly once —
+// the same completeness guarantee TestCheatsheetLayout_CoversEveryBindingOnce
+// pins for the ideal layout, re-checked against whatever compressed shape
+// the fit produced. A binding that quietly vanished when the table went
+// two-column would be worse than one that was merely hard to read.
+func allCheatsheetRowsCovered(t *testing.T, plan cheatsheetFitPlan) {
+	t.Helper()
+	seen := map[string]int{}
+	for _, col := range plan.cols {
+		for _, r := range col {
+			seen[r.key]++
+		}
+	}
+	for _, b := range leaderBindings() {
+		if seen[string(b.key)] != 1 {
+			t.Errorf("rune binding %q appears %d times in the fit plan, want 1", string(b.key), seen[string(b.key)])
+		}
+	}
+	for _, b := range leaderKeyBindings() {
+		if seen[b.label] != 1 {
+			t.Errorf("named-key binding %q appears %d times, want 1", b.label, seen[b.label])
+		}
+	}
+}
+
+// TestCheatsheetFit_TallScreenKeepsIdealLayout pins the case that must
+// stay unchanged: a screen tall enough for the ideal layout (dividers and
+// all) gets exactly cheatsheetLayout's own shape, not a compressed one.
+// 80x40 stands in for "plenty of room" the way the phase brief asked.
+func TestCheatsheetFit_TallScreenKeepsIdealLayout(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	resizeTestApp(t, a, 80, 40)
+
+	wantRows, wantDividers, wantHeight := a.cheatsheetLayout()
+	plan := a.cheatsheetFit()
+
+	if len(plan.cols) != 1 {
+		t.Fatalf("cols = %d, want 1 (plenty of vertical room)", len(plan.cols))
+	}
+	if len(plan.cols[0]) != len(wantRows) {
+		t.Fatalf("got %d rows, want %d", len(plan.cols[0]), len(wantRows))
+	}
+	if len(plan.dividers[0]) != len(wantDividers) {
+		t.Fatalf("got %d dividers, want %d (none dropped)", len(plan.dividers[0]), len(wantDividers))
+	}
+	if plan.height != wantHeight {
+		t.Fatalf("height = %d, want the ideal %d", plan.height, wantHeight)
+	}
+	mx, my, mw, mh := a.cheatsheetRect()
+	if mx+mw > a.width || my+mh > a.height {
+		t.Fatalf("modal rect (%d,%d,%d,%d) overflows an 80x40 screen", mx, my, mw, mh)
+	}
+	allCheatsheetRowsCovered(t, plan)
+}
+
+// TestCheatsheetFit_ShortScreenDropsDividersBeforeColumns is the loose
+// end itself: on an 80x24 terminal the ideal layout (27 rows) clips, but
+// dropping the divider rows alone is enough to fit within height minus
+// the two-row margin — so the fix must choose that tier, a single
+// column, rather than jumping straight to two columns.
+func TestCheatsheetFit_ShortScreenDropsDividersBeforeColumns(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	resizeTestApp(t, a, 80, 24)
+
+	_, _, idealHeight := a.cheatsheetLayout()
+	if idealHeight <= 24-2 {
+		t.Fatalf("fixture assumption broken: ideal height %d already fits in 24 rows minus the margin", idealHeight)
+	}
+
+	plan := a.cheatsheetFit()
+	if len(plan.cols) != 1 {
+		t.Fatalf("cols = %d, want 1 — dropping dividers alone should fit 80x24, no need for columns", len(plan.cols))
+	}
+	if len(plan.dividers[0]) != 0 {
+		t.Fatalf("dividers = %v, want none — they should have been dropped to fit", plan.dividers[0])
+	}
+	if plan.height > 24-2 {
+		t.Fatalf("height = %d, want it to fit within screen height minus 2 (22)", plan.height)
+	}
+	mx, my, mw, mh := a.cheatsheetRect()
+	if mx+mw > a.width || my+mh > a.height {
+		t.Fatalf("modal rect (%d,%d,%d,%d) overflows an 80x24 screen", mx, my, mw, mh)
+	}
+	allCheatsheetRowsCovered(t, plan)
+
+	// Draw it for real and confirm every binding still reaches the
+	// screen — the fit plan can be correct on paper and still miss a row
+	// in the paint if the two are computed from different data.
+	a.openCheatsheet()
+	a.draw()
+	a.screen.Show()
+	text := screenText(a)
+	for _, r := range plan.cols[0] {
+		if !strings.Contains(text, "Esc "+r.key) {
+			t.Errorf("80x24 cheatsheet is missing key label %q", "Esc "+r.key)
+		}
+		if !strings.Contains(text, r.hint) {
+			t.Errorf("80x24 cheatsheet is missing hint %q", r.hint)
+		}
+	}
+}
+
+// TestCheatsheetFit_VeryShortScreenUsesTwoColumns forces the last-resort
+// tier with a screen short enough that even the divider-free single
+// column doesn't fit, and checks the table actually spread sideways
+// rather than clipping rows off the bottom.
+func TestCheatsheetFit_VeryShortScreenUsesTwoColumns(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	resizeTestApp(t, a, 80, 20)
+
+	_, dividers, idealHeight := a.cheatsheetLayout()
+	noDividerHeight := idealHeight - len(dividers)
+	if noDividerHeight <= 20-2 {
+		t.Fatalf("fixture assumption broken: divider-free height %d already fits in 20 rows minus the margin", noDividerHeight)
+	}
+
+	plan := a.cheatsheetFit()
+	if len(plan.cols) != 2 {
+		t.Fatalf("cols = %d, want 2 at 80x20", len(plan.cols))
+	}
+	if len(plan.dividers[0]) != 0 || len(plan.dividers[1]) != 0 {
+		t.Fatalf("dividers = %v, want none in either column", plan.dividers)
+	}
+	// Every group must stay whole within its column.
+	for c, rows := range plan.cols {
+		firstRow := map[string]int{}
+		for i, r := range rows {
+			if prev, ok := firstRow[r.group]; ok && i != prev+1 && rows[i-1].group != r.group {
+				t.Errorf("column %d: group %q is not contiguous", c, r.group)
+			}
+			firstRow[r.group] = i
+		}
+	}
+	mx, my, mw, mh := a.cheatsheetRect()
+	if mx+mw > a.width+1 { // the fit may need to shrink columns; width must still be sane.
+		t.Errorf("modal width %d wildly exceeds an 80-column screen", mw)
+	}
+	if my+mh > a.height {
+		t.Errorf("modal rect (%d,%d,%d,%d) overflows an 80x20 screen", mx, my, mw, mh)
+	}
+	allCheatsheetRowsCovered(t, plan)
+
+	// Paint the modal directly rather than through a.draw(): 20 rows is
+	// below minHeight, and a.draw()'s own "resize the terminal" gate
+	// (unrelated to this loose end) would otherwise replace the whole
+	// screen with drawTooSmall's message before drawCheatsheet ever ran.
+	// What this test is pinning is that the painter itself places every
+	// row somewhere on screen once it has a two-column plan to draw.
+	a.openCheatsheet()
+	a.drawCheatsheet()
+	a.screen.Show()
+	text := screenText(a)
+	for _, col := range plan.cols {
+		for _, r := range col {
+			if !strings.Contains(text, "Esc "+r.key) {
+				t.Errorf("two-column cheatsheet is missing key label %q", "Esc "+r.key)
+			}
+		}
+	}
+}
+
+// TestSplitRowsByGroup_NeverSplitsAGroup pins splitRowsByGroup's one hard
+// rule directly, independent of screen size or the real leader table.
+func TestSplitRowsByGroup_NeverSplitsAGroup(t *testing.T) {
+	rows := []leaderRow{
+		{group: "A", key: "1"}, {group: "A", key: "2"}, {group: "A", key: "3"},
+		{group: "B", key: "4"},
+		{group: "C", key: "5"}, {group: "C", key: "6"},
+	}
+	left, right := splitRowsByGroup(rows)
+	if len(left)+len(right) != len(rows) {
+		t.Fatalf("split lost or duplicated rows: left=%d right=%d want total %d", len(left), len(right), len(rows))
+	}
+	seen := map[string]bool{}
+	for _, col := range [][]leaderRow{left, right} {
+		groupsHere := map[string]bool{}
+		for _, r := range col {
+			if seen[r.group] && !groupsHere[r.group] {
+				t.Fatalf("group %q appears in both columns", r.group)
+			}
+			groupsHere[r.group] = true
+		}
+		for g := range groupsHere {
+			seen[g] = true
+		}
+	}
+}

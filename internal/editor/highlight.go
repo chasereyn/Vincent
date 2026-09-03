@@ -86,7 +86,8 @@ func HighlightVisible(filename string, lines []string, startLine, height int, t 
 	return styles
 }
 
-// highlightSource tokenises src and returns one style row per source line.
+// highlightSource tokenises src and returns one style row per source line,
+// choosing a lexer from filename the way any file on disk would.
 func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	lexer := lexers.Match(filename)
 	if lexer == nil {
@@ -95,6 +96,38 @@ func highlightSource(filename, src string, t theme.Theme) [][]tcell.Style {
 	if lexer == nil {
 		lexer = lexers.Fallback
 	}
+	return tokenizeWithLexer(lexer, src, t)
+}
+
+// HighlightLang tokenises src using the Chroma lexer registered under lang
+// — a fenced markdown code block's info string ("go", "python", "bash",
+// ...) — falling back to content sniffing, then plain text.
+//
+// This is deliberately a separate entry point from Highlight rather than
+// Highlight("code."+lang, ...): lexers.Match resolves a lexer from a
+// filename's extension, and a fence's language tag is often not a real
+// extension at all ("python" vs. the actual ".py", "javascript" vs.
+// ".js") — lexers.Get looks a lexer up by its registered name and
+// aliases instead, which is what a language tag actually is.
+func HighlightLang(lang, src string, t theme.Theme) [][]tcell.Style {
+	var lexer chroma.Lexer
+	if lang != "" {
+		lexer = lexers.Get(lang)
+	}
+	if lexer == nil {
+		lexer = lexers.Analyse(src)
+	}
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	return tokenizeWithLexer(lexer, src, t)
+}
+
+// tokenizeWithLexer runs lexer over src and returns one style row per
+// source line. Shared by Highlight (lexer chosen from a filename) and
+// HighlightLang (lexer chosen from a fence's language tag) so the two
+// entry points can't drift on how a token maps to a style.
+func tokenizeWithLexer(lexer chroma.Lexer, src string, t theme.Theme) [][]tcell.Style {
 	// Coalesce merges adjacent same-type tokens; cheaper to scan in render.
 	lexer = chroma.Coalesce(lexer)
 

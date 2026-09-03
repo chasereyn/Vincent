@@ -98,6 +98,9 @@ func leaderBindings() []leaderBinding {
 		{'f', "explorer", leaderGroupView, (*App).menuToggleSidebar},
 		{'t', "tab bar", leaderGroupView, (*App).menuToggleTabBar},
 		{'z', "fold all", leaderGroupView, (*App).menuCollapseTree},
+		// 'm' toggles the active .md tab between its rendered and raw
+		// views. A no-op on any other tab — see Tab.ToggleMarkdownView.
+		{'m', "markdown", leaderGroupView, (*App).menuToggleMarkdownView},
 		// 'o' is "open a different root" — the folder switcher. Pressed a
 		// second time while the picker is up it flips to browsing the
 		// filesystem, which is the two-gesture shape the owner asked for.

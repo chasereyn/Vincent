@@ -19,6 +19,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/chasereyn/vincent/internal/diff"
+	"github.com/chasereyn/vincent/internal/markdown"
 	"github.com/chasereyn/vincent/internal/theme"
 )
 
@@ -154,6 +155,32 @@ type Tab struct {
 	// painted over the top.
 	DiffOverlays []DiffOverlay
 
+	// MarkdownSource is the raw markdown text the current MarkdownRows
+	// were rendered from, populated when Mode == markdownMode. Kept apart
+	// from Buffer.Lines (which holds the RENDERED text, one line per
+	// MarkdownRows entry) because toggling back to raw mode needs the
+	// original source, not what wrapping produced, and because a resize
+	// re-renders from this rather than re-wrapping already-wrapped text.
+	// See markdownview.go.
+	MarkdownSource string
+	// MarkdownRows is the current rendered layout, parallel to
+	// Buffer.Lines the same way DiffRows is parallel to a diff tab's
+	// buffer — row i of MarkdownRows is line i of the buffer.
+	MarkdownRows []markdown.Row
+	// markdownWidth is the content width MarkdownRows was last wrapped
+	// to. Render re-renders from MarkdownSource whenever this stops
+	// matching the pane's actual width, which is what makes a terminal
+	// resize re-wrap the document instead of leaving stale line breaks.
+	// Starts at -1 (an impossible width) so the first render always lays
+	// out, even into a momentarily zero-width pane.
+	markdownWidth int
+	// markdownCodeStyles is the Chroma style grid for every fenced code
+	// block in MarkdownRows, indexed the same way MarkdownRows is (nil
+	// for a row that isn't code). Recomputed whenever StyleStale is set —
+	// by rewrapMarkdown, exactly the trigger the text and diff paths
+	// already use for their own highlight caches.
+	markdownCodeStyles [][]tcell.Style
+
 	// Find state — populated when the user opens the find bar and
 	// types a query. The UI layer (App) owns the bar geometry and
 	// keystroke routing; the tab owns the query, the resolved match
@@ -224,10 +251,15 @@ func flushRow(scr tcell.Screen, x, cy int, row []renderCell) {
 // is created with an empty buffer that will be written on first save —
 // matching what most editors do when you "open" a brand-new file path.
 // When path looks like an image we recognise (PNG / JPEG / GIF), the tab
-// is opened in read-only image-preview mode instead of as text.
+// is opened in read-only image-preview mode instead of as text. A .md or
+// .markdown path opens rendered instead of raw — Esc m swaps it to the
+// ordinary editable text tab this function would otherwise have returned.
 func NewTab(path string) (*Tab, error) {
 	if path != "" && isImageExt(path) {
 		return newImageTab(path)
+	}
+	if path != "" && IsMarkdownExt(path) {
+		return NewMarkdownTab(path)
 	}
 	var data []byte
 	var mtime time.Time
@@ -430,6 +462,21 @@ func (t *Tab) Reload() error {
 		}
 		t.Image = img
 		t.ImageFmt = format
+		t.Mtime = info.ModTime()
+		t.DiskGone = false
+		t.Conflict = false
+		return nil
+	}
+	if t.IsMarkdown() {
+		data, err := os.ReadFile(t.Path)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(t.Path)
+		if err != nil {
+			return err
+		}
+		t.SetMarkdownSource(string(data))
 		t.Mtime = info.ModTime()
 		t.DiskGone = false
 		t.Conflict = false
@@ -719,6 +766,9 @@ func (t *Tab) gutterCells() int {
 	if t.IsDiff() {
 		return diffGutterCells(t.DiffRows)
 	}
+	if t.IsMarkdown() {
+		return 0 // a rendered document, not a gutter of line numbers.
+	}
 	return gutterWidthFor(t.Buffer.LineCount()) + 1
 }
 
@@ -767,6 +817,10 @@ func (t *Tab) Render(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	}
 	if t.IsDiff() {
 		t.renderDiff(scr, th, x, y, w, h)
+		return
+	}
+	if t.IsMarkdown() {
+		t.renderMarkdown(scr, th, x, y, w, h)
 		return
 	}
 	// Only re-center on the cursor if the cursor moved this tick. Doing it
@@ -966,6 +1020,9 @@ func gitLineMarkerColor(th theme.Theme, change GitLineChange) tcell.Color {
 func (t *Tab) HitTest(localX, localY, w, h int) (Position, bool) {
 	if t.IsDiff() {
 		return t.diffHitTest(localX, localY, w, h)
+	}
+	if t.IsMarkdown() {
+		return t.markdownHitTest(localX, localY, w, h)
 	}
 	if localY < 0 || localY >= h {
 		return Position{}, false

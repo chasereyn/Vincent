@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.4.0`
+- Version: `internal/version/version.go`, currently `0.5.0`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -56,9 +56,10 @@ closes: open a repo, `Esc g` for the Changes panel, click a file, read its
 diff, `Esc r` on a line to write a note, `Esc Enter` to drop the batch
 into the agent's prompt. Version 0.4.0 followed the first real session
 (menu removed, `Esc ?`, `Esc o`, `Esc z`, wider tree, folder glyphs).
-Phases 3b (git writes) and 6b (find/replace, new file, save-as,
-triple-click, Enter indent) landed on 2026-09-03 and have not been seen on
-a real terminal. Then phases 8 and 9.
+Phases 3b (git writes), 6b (find/replace, new file, save-as,
+triple-click, Enter indent) and 7 (markdown) landed on 2026-09-03 as
+version 0.5.0 and have not been seen on a real terminal. Then phases 8
+and 9.
 
 - **Phase 3b, git writes.** The three blunt writes, off the Changes panel
   and off three leader keys. `Esc c` arms a commit message box in the panel
@@ -75,6 +76,23 @@ a real terminal. Then phases 8 and 9.
   stage the version on disk instead of the one on screen. A locked index
   gets its own sentence and NO retry loop; every other failure gets one
   line on screen and the full stderr in `herdr.log`.
+- **Phase 7, markdown.** `internal/markdown` wraps goldmark into a pure
+  row model — `[]Row`, each a slice of styled `Span`s (`Text`,
+  `Heading1..3`, `Bold`, `Italic`, `Code`, `CodeBlock`, `Link`,
+  `ListMarker`, `Quote`, `Rule`, `TableBorder`, `TableHeader`) — with no
+  tcell import, mirroring `internal/diff`'s split. `editor/markdownview.go`
+  paints it as a new `Tab.Mode`: headings bold in `theme.Accent`, fenced
+  code boxed in `theme.ReviewBoxBG` and Chroma-highlighted through the new
+  `HighlightLang` (resolves a fence's language tag by name, not by the
+  fake file extension `Highlight` would need), links underlined in
+  `theme.SynProperty`, quotes and table borders in `theme.Subtle`. A `.md`
+  file opens rendered by default (`editor.NewTab` dispatches to
+  `NewMarkdownTab` the way it already dispatches images); `Esc m`
+  (`Tab.ToggleMarkdownView`) swaps the same tab to the ordinary editable
+  raw-text view and back, preserving scroll position as a fraction of the
+  document and previewing whatever is currently in the buffer — an
+  unsaved raw-mode edit included. A rendered tab re-renders itself when
+  the file changes on disk, the same way a diff tab does.
 - **Phase 3, the review loop.** `internal/review` holds the note model,
   the wire format, and the herdr client. A diff tab grows overlay rows for
   the inline composer and for saved-note markers (`editor/diffoverlay.go`).
@@ -146,7 +164,7 @@ user's source.
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        2761  Event loop, layout rects, mouse dispatch, rendering
+internal/app/app.go        2819  Event loop, layout rects, mouse dispatch, rendering
 internal/app/modals.go     1257  Modal scaffolding; dirty/conflict buttons are data
 internal/app/review.go     1130  Composer, saved-note markers, footer batch, send/copy
 internal/app/gitpanel.go    516  The Changes panel: layout, rows, clicks, review footer
@@ -161,16 +179,19 @@ internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
 internal/app/frame.go       219  frameKey: skip the repaint when motion changed nothing
 internal/app/gitpoll.go     202  The 10s git refresh on a worker -> gitPollEvent
 internal/app/conflict.go    179  Overwrite / Reload / Cancel / Show diff prompt
-internal/app/cheatsheet.go  220  The Esc-? key table, generated from leader.go
+internal/app/cheatsheet.go  363  The Esc-? key table, generated from leader.go; cheatsheetFit compresses it to fit a short screen
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
-internal/app/leader.go      192  Esc key bindings + hints; leaderRows is THE key list
+internal/app/leader.go      199  Esc key bindings + hints; leaderRows is THE key list
 internal/app/reviewlog.go    ~60 review.Logf -> ~/.config/vincent/herdr.log
+internal/app/markdownview.go 78  Esc-m dispatch, reconcile a rendered tab on disk change
 internal/review/review.go   335  Comment, Batch, Render (wire format), Sanitize/Wrap
 internal/review/herdr.go    239  herdr agent list / pane send-text / agent focus
-internal/editor/tab.go      985  Tab: buffer, cursor, scroll, hit-test, Conflict
+internal/editor/tab.go     1042  Tab: buffer, cursor, scroll, hit-test, Conflict
 internal/editor/diffview.go 411  Diff render: dual gutters, row + word tints, overlays
 internal/editor/diffoverlay.go 204 Rows the app grows into a diff (composer, markers)
-internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid
+internal/editor/markdownview.go 408 Markdown render: headings, boxed/highlighted code, links, toggle raw<->rendered
+internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid; HighlightLang resolves by fence language name
+internal/markdown           873  Row model: goldmark AST -> styled Span rows, no tcell — mirrors internal/diff
 internal/filetree           736  Lazy tree, refresh, guides, hover, CollapseAll
 internal/finder             583  Filename index (git ls-files) + fzy-style scorer
 internal/diff               364  Unified-diff parser — no tcell, no git, pure
@@ -418,9 +439,17 @@ starting its phase.
 | 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | **done** |
 | 6a | Editor safety: bracketed paste, conflict model | **done** |
 | 6b | Editor: find/replace, new file, save-as, triple-click line select, Enter carries indent | **done** |
-| 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | |
-| 8 | Multi-repo workspace + content search | |
+| 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | **done** |
+| 8 | Multi-repo workspace + content search | next |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | |
+
+**Phase 8 is still wanted; do not trim it because `Esc o` exists.** Confirmed
+by Chase on 2026-09-03: at work the root is `~/Developer/RP-Repos`, a flat
+folder of company repos, and the root switcher is how he moves between that
+folder and a personal project at home. So a root that *contains* repos is
+the normal work case, and the Changes panel, the branch row, and the three
+git writes must act on the repo that owns the active file. Myers diff for
+exact word tint and buffer-vs-disk also lands in phase 8.
 
 Phases 4 and 5 do not depend on 3 and can run in parallel with it.
 
