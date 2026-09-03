@@ -387,7 +387,7 @@ func Unified(oldName, newName string, oldText, newText []byte, context int) stri
 	newLines, newNL := splitLines(newText)
 
 	var groups []opGroup
-	if ops, ok := myersDiff(oldLines, newLines, maxLineEditDistance); ok {
+	if ops, ok := myersDiff(withTerminator(oldLines, oldNL), withTerminator(newLines, newNL), maxLineEditDistance); ok {
 		groups = groupOps(ops)
 	} else {
 		if len(oldLines) > 0 {
@@ -410,6 +410,23 @@ func Unified(oldName, newName string, oldText, newText []byte, context int) stri
 		writeHunk(&b, h, oldLines, newLines, oldNL, newNL)
 	}
 	return b.String()
+}
+
+// withTerminator returns lines with a newline appended to the last element
+// when the text ended in one, for the line comparison only. Without it two
+// texts that differ solely in a trailing newline split into identical line
+// slices, the diff comes back empty, and the conflict prompt's Show diff
+// would report "no difference" for a change the byte comparison just
+// flagged. The output side still prints the original lines, so the marker
+// logic in writeHunk is unaffected.
+func withTerminator(lines []string, endsWithNewline bool) []string {
+	if !endsWithNewline || len(lines) == 0 {
+		return lines
+	}
+	out := make([]string, len(lines))
+	copy(out, lines)
+	out[len(out)-1] += "\n"
+	return out
 }
 
 // --- Token-level diff, used by assignWordRanges in diff.go ---

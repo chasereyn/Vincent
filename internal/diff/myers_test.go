@@ -345,3 +345,21 @@ func BenchmarkAssignWordRanges(b *testing.B) {
 		assignWordRanges(cp)
 	}
 }
+
+// TestUnified_TrailingNewlineOnlyIsADiff pins the one case the first cut
+// missed: identical lines that differ only in whether the file ends with a
+// newline must produce a hunk, because the conflict prompt only opens
+// Show diff after a byte comparison said the contents differ.
+func TestUnified_TrailingNewlineOnlyIsADiff(t *testing.T) {
+	out := Unified("f", "f", []byte("a\nb\n"), []byte("a\nb"), 3)
+	if out == "" {
+		t.Fatal("Unified returned no diff for a trailing-newline-only change")
+	}
+	if !strings.Contains(out, "-b\n") || !strings.Contains(out, "+b\n\\ No newline at end of file\n") {
+		t.Fatalf("unexpected diff:\n%s", out)
+	}
+	rows := Parse(out)
+	if len(rows) == 0 {
+		t.Fatal("the trailing-newline diff did not parse into rows")
+	}
+}
