@@ -61,6 +61,44 @@ triple-click, Enter indent) and 7 (markdown) landed on 2026-09-03 as
 version 0.5.0 and have not been seen on a real terminal. Then phases 8
 and 9.
 
+- **Phase 8b, content search.** `Esc F` opens a grep-across-the-project
+  modal, shaped like the Esc-p finder: a query field on top, result rows
+  below, hover-follows-mouse, wheel scroll. It shares the finder's index
+  rather than walking the filesystem a second time — `finder.Finder.Paths()`
+  (new) hands back the whole unranked path list, which is now built
+  multi-root: `internal/finder/index.go`'s `BuildIndex` calls
+  `repos.Discover(root)` and, when root is a folder of repos rather than a
+  repo itself, indexes each repo concurrently (bounded worker count) with
+  its own git-fast-path-or-walk, prefixes each repo's paths with its
+  folder relative to root, and walks only the leftover part of root that
+  isn't inside any repo. When root IS a repo this is byte-identical to the
+  old single-repo path — pinned by
+  `TestBuildIndex_RootIsRepoUnchanged`. The actual grep is
+  `internal/search` (pure, no tcell): a bounded worker pool
+  (`runtime.NumCPU`, capped at 8) that skips anything over 1MB or with a
+  NUL in its first 8KB, matches case-insensitive substring by default or a
+  regexp behind a `re:` prefix, and caps total matches at 2000. Typing
+  debounces 150ms (`internal/app/search.go`'s `searchQueryChanged` /
+  `scheduleSearch`, a plain `time.AfterFunc`, not a goroutine of its own)
+  before a run starts; every query-changing keystroke bumps a generation
+  counter and cancels whatever the previous keystroke had in flight — the
+  debounce timer AND the engine's own `ctx`, immediately, not after the
+  new debounce elapses — so a fast typist never leaves an abandoned search
+  burning CPU. Results stream back as batched `searchResultsEvent`s (a
+  goroutine reads the engine's channel, flushes on a time-or-size bound,
+  and posts one final event carrying the outcome — ordered to always
+  arrive after every batch, never before, which took a rewrite to get
+  right: see the comment on `runSearchIfCurrent`'s `outcomeCh`), applied
+  on the UI thread and dropped if their generation is stale. `engine` on
+  `searchState` is injectable, same shape as `gitwrite.go`'s `gitRunner`,
+  so the event-flow tests use a fake instead of the real filesystem.
+  Opening a result places the cursor via the ordinary `Tab.MoveCursorTo` —
+  no special-casing needed, same as the find bar. The matched span in each
+  row is painted in `theme.FindCurrent`, the same accent the finder's own
+  fuzzy-match highlighting and the in-file find bar's current-match marker
+  use, so all three "here's what matched" cues read as one visual
+  language.
+
 - **Phase 3b, git writes.** The three blunt writes, off the Changes panel
   and off three leader keys. `Esc c` arms a commit message box in the panel
   footer — stacked ABOVE the review block, not instead of it — and Enter
@@ -164,8 +202,9 @@ user's source.
 
 ```
 main.go                          CLI parsing — pure, testable, no tcell until the end
-internal/app/app.go        2819  Event loop, layout rects, mouse dispatch, rendering
-internal/app/modals.go     1257  Modal scaffolding; dirty/conflict buttons are data
+internal/app/app.go        3002  Event loop, layout rects, mouse dispatch, rendering
+internal/app/search.go      765  Esc F: content search modal, debounce + generation, streamed results
+internal/app/modals.go     1282  Modal scaffolding; dirty/conflict buttons are data
 internal/app/review.go     1130  Composer, saved-note markers, footer batch, send/copy
 internal/app/gitpanel.go    516  The Changes panel: layout, rows, clicks, review footer
 internal/app/finder.go      474  Fuzzy file-finder modal
@@ -176,12 +215,12 @@ internal/app/commitbox.go   359  Esc c: the footer commit box and its commit
 internal/app/gitentries.go  258  THE git status parse — tree and panel both
 internal/app/diffview.go    250  git diff shell-outs, diff tabs, live refresh
 internal/app/gitstatus.go   225  Branch, gutter markers, dirty-folder rollup
-internal/app/frame.go       219  frameKey: skip the repaint when motion changed nothing
+internal/app/frame.go       303  frameKey: skip the repaint when motion changed nothing
 internal/app/gitpoll.go     202  The 10s git refresh on a worker -> gitPollEvent
 internal/app/conflict.go    179  Overwrite / Reload / Cancel / Show diff prompt
 internal/app/cheatsheet.go  363  The Esc-? key table, generated from leader.go; cheatsheetFit compresses it to fit a short screen
 internal/app/pathops.go     106  Copy relative / absolute path to clipboard
-internal/app/leader.go      199  Esc key bindings + hints; leaderRows is THE key list
+internal/app/leader.go      213  Esc key bindings + hints; leaderRows is THE key list
 internal/app/reviewlog.go    ~60 review.Logf -> ~/.config/vincent/herdr.log
 internal/app/markdownview.go 78  Esc-m dispatch, reconcile a rendered tab on disk change
 internal/review/review.go   335  Comment, Batch, Render (wire format), Sanitize/Wrap
@@ -193,7 +232,9 @@ internal/editor/markdownview.go 408 Markdown render: headings, boxed/highlighted
 internal/editor/highlight.go 210 Chroma -> per-rune []tcell.Style grid; HighlightLang resolves by fence language name
 internal/markdown           873  Row model: goldmark AST -> styled Span rows, no tcell — mirrors internal/diff
 internal/filetree           736  Lazy tree, refresh, guides, hover, CollapseAll
-internal/finder             583  Filename index (git ls-files) + fzy-style scorer
+internal/finder             741  Multi-root filename index (repos.Discover + git ls-files) + fzy scorer
+internal/search             416  Content search engine: worker pool, substring/regexp, no tcell
+internal/repos               127 Discover(root) []string, Owner/Rel — repo boundaries for a multi-repo root
 internal/diff               364  Unified-diff parser — no tcell, no git, pure
 internal/icons              390  Nerd Font glyphs per file type
 internal/theme              251  The palette. Ayu Darker on #030405
