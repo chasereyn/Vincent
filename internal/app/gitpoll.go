@@ -34,9 +34,11 @@
 //
 // Two rules worth stating because getting them wrong is subtle:
 //
-//   - ONE POLL IN FLIGHT. If the previous one has not come back, the tick is
-//     skipped. Otherwise a slow repo stacks up workers, each forking git,
-//     and the pile makes the thing it is measuring worse.
+//   - ONE POLL IN FLIGHT, BUT NOT FOREVER. If the previous one has not come
+//     back, the tick is skipped — otherwise a slow repo stacks up workers,
+//     each forking git, and the pile makes the thing it is measuring worse.
+//     The exception is a poll older than gitPollStuckAfter: see startGitPoll
+//     for why an unconditional guard is a silent off switch.
 //   - RESULTS FOR A CLOSED TAB ARE DROPPED. applyGitPoll walks the live tab
 //     list and looks each tab up in the result, never the other way round,
 //     so a tab closed (or opened) mid-poll simply is not in the join.
@@ -110,16 +112,35 @@ type gitPollResult struct {
 	files map[string]gitPollFile
 }
 
+// gitPollStuckAfter is how long an in-flight poll is believed before the
+// guard stops trusting it. Three ticks: long enough that a genuinely slow
+// `git status` on a huge repo is never overtaken, short enough that a
+// wedged poller costs half a minute of staleness rather than the session.
+const gitPollStuckAfter = 30 * time.Second
+
 // startGitPoll kicks off a background refresh, unless one is already in
 // flight. Runs on the UI thread; returns whether it actually launched, which
 // is what the tests assert the in-flight guard on.
+//
+// The guard has a deadline, and the deadline is the point. gitPollBusy is
+// cleared in exactly one place — applyGitPoll, reached by the worker's
+// PostEvent — so anything that stops that event arriving leaves the flag
+// stuck true and silently kills the ten-second refresh for the rest of the
+// session: a PostEvent that fails because tcell's queue was full, a worker
+// that panics inside a git read, a screen swapped out from under it in a
+// test. None of those are hypothetical enough to leave the only auto-refresh
+// in the app depending on them. After gitPollStuckAfter we assume the
+// previous poll is never coming back and launch anyway; the worst case is
+// two workers reading git at once, which is exactly what the guard was
+// avoiding as an optimisation, not as a correctness rule.
 func (a *App) startGitPoll() bool {
-	if a.gitPollBusy {
+	if a.gitPollBusy && time.Since(a.gitPollStartedAt) < gitPollStuckAfter {
 		return false
 	}
 	req := a.buildGitPollRequest()
 	scr := a.screen
 	a.gitPollBusy = true
+	a.gitPollStartedAt = time.Now()
 	go func() {
 		res := runGitPoll(req)
 		// A failed post means the screen is gone (we are shutting down) or

@@ -326,6 +326,35 @@ func TestAwaitGitPollHelperSeesOtherEvents(t *testing.T) {
 	}
 }
 
+// TestStartGitPoll_ProceedsAfterAStuckPoll is the deadlock guard on the
+// only auto-refresh in the app.
+//
+// gitPollBusy is cleared in exactly one place — applyGitPoll, reached by the
+// worker's PostEvent. A PostEvent that fails on a full queue, or a worker
+// that dies inside a git read, therefore used to leave the flag true for the
+// rest of the session and silently stop the ten-second refresh: the panel
+// just quietly stopped telling the truth. After gitPollStuckAfter the guard
+// stops believing the in-flight poll and launches anyway.
+func TestStartGitPoll_ProceedsAfterAStuckPoll(t *testing.T) {
+	requireGit(t)
+	a := newTestApp(t, initRepo(t))
+
+	a.gitPollBusy = true
+	a.gitPollStartedAt = time.Now()
+	if a.startGitPoll() {
+		t.Fatal("a poll that just launched must still block the next one")
+	}
+
+	a.gitPollStartedAt = time.Now().Add(-gitPollStuckAfter - time.Second)
+	if !a.startGitPoll() {
+		t.Error("a poll older than gitPollStuckAfter must not block the next one")
+	}
+	if time.Since(a.gitPollStartedAt) > time.Minute {
+		t.Error("startGitPoll must restamp gitPollStartedAt when it launches")
+	}
+	awaitGitPoll(t, a)
+}
+
 // pollNow runs one git poll synchronously and returns its per-file results,
 // so tests that drive reconcileOpenTabsWithDisk directly can hand it the
 // same data the background poller would. It exists because the phase-6a
