@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `1.0.1`
+- Version: `internal/version/version.go`, currently `1.0.2`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -440,6 +440,21 @@ This matters more than it looks: the goroutine-to-UI-thread pattern
 catches problems in, and every new background worker — the git status
 poller, the multi-repo indexer, the content-search pool — lands in that
 pattern. Do not assume local green means race-free.
+
+## Herdr plugin
+
+`herdr-plugin.toml` at the repo root makes Vincent installable with
+`herdr plugin install chasereyn/vincent`. Its `version` must equal the
+release tag the install step downloads (`herdr/install.sh` reads it and
+fetches `vincent-<os>-<arch>` from `v<version>`, verified against the
+release's `checksums.txt`), so bump it together with
+`internal/version/version.go`. The pane placement is `tab`, because Vincent
+wants a whole screen; `herdr/open.sh` toggles it. Linux and macOS only:
+herdr cannot spawn a relative pane command on Windows. Vincent reads
+`HERDR_ENV`, `HERDR_WORKSPACE_ID`, and `HERDR_PANE_ID` from the pane's
+environment, which is what lets `Esc Enter` find the agent in the same
+workspace. The marketplace lists only PUBLIC repos with the `herdr-plugin`
+topic; the topic is set, the repo is still private.
 
 ## Shipping
 

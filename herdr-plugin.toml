@@ -1,0 +1,59 @@
+# herdr-plugin.toml — Vincent as a herdr plugin.
+#
+# Vincent is a whole review client (file tree, diffs, Changes panel, editor),
+# not a sidebar, so the default pane placement is a TAB: it wants the width.
+# The `open` action toggles that tab; `open-split` opens it beside the current
+# pane for the times a glance is enough.
+#
+# Install fetches the release binary that matches this manifest's `version`
+# (see herdr/install.sh), so bump `version` here in lock step with
+# internal/version/version.go — the release tag is v<version>. A locally
+# linked checkout skips the build step; `make build` puts the same binary
+# at bin/vincent, which is where the pane command looks.
+#
+# Linux and macOS only for now. herdr cannot spawn a relative [[panes]]
+# command on Windows (verified by herdr-file-viewer and herdr-sidebar
+# against 0.7.1 and 0.8), and a Windows launcher path has not been written.
+
+id = "chasereyn.vincent"
+name = "Vincent"
+version = "1.0.2"
+description = "Review code that AI agents wrote, send them notes, fix the small stuff yourself. Mouse-first, one static binary."
+min_herdr_version = "0.8.0"
+platforms = ["linux", "macos"]
+
+# Download the release binary for this platform into bin/ and verify its
+# SHA-256 against the release's checksums.txt. Falls back to `go build`
+# when Go is on PATH and the download is not possible.
+[[build]]
+command = ["bash", "herdr/install.sh"]
+
+# The pane's cwd is the user's working directory, which is exactly the root
+# Vincent should open. HERDR_PLUGIN_ROOT is injected into the pane's
+# environment, so the binary is found by absolute path wherever herdr put
+# the checkout.
+[[panes]]
+id = "vincent"
+title = "Vincent"
+placement = "tab"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/vincent\""]
+
+# Toggle Vincent in its own tab: open if absent, switch to it if elsewhere,
+# close it if it is the focused pane. Bind a key in ~/.config/herdr/config.toml:
+#   [[keys.command]]
+#   key = "prefix+v"
+#   type = "plugin_action"
+#   command = "chasereyn.vincent.open"
+[[actions]]
+id = "open"
+title = "Open Vincent"
+description = "Open Vincent in its own tab (switch to it if already open, close it if focused)."
+contexts = ["pane", "workspace"]
+command = ["bash", "herdr/open.sh", "tab"]
+
+[[actions]]
+id = "open-split"
+title = "Open Vincent (split)"
+description = "Open Vincent in a split beside the current pane (focus it if open, close it if focused)."
+contexts = ["pane", "workspace"]
+command = ["bash", "herdr/open.sh", "split"]

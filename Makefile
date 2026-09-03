@@ -84,7 +84,7 @@ help:
 	@echo "  make install      Build and copy to $(INSTALL_DIR)."
 	@echo "  make build-linux  Cross-compile a static linux/amd64 binary."
 	@echo "  make build-mac    Cross-compile a static darwin/arm64 binary."
-	@echo "  make release-build  Build all three release binaries into ./bin."
+	@echo "  make release-build  Build every release binary into ./bin."
 	@echo "  make test         Run the full suite."
 	@echo "  make test-race    Run with -race (needs cgo; CI parity)."
 	@echo "  make test-short   Skip slow tests - quick iteration loop."
@@ -149,7 +149,9 @@ build-mac: | bin
 # the same way the release assets do, .exe included on Windows.
 release-build: | bin
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-darwin-arm64 .
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-darwin-amd64 .
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-linux-amd64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-linux-arm64 .
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/vincent-windows-amd64.exe .
 
 # test runs the full suite. Deliberately WITHOUT -race: the race detector

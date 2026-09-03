@@ -46,8 +46,14 @@ jobs:
           - goos: darwin
             goarch: arm64
             ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
           - goos: linux
             goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
             ext: ""
           - goos: windows
             goarch: amd64
@@ -90,6 +96,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # checksums.txt lets the herdr plugin's install step verify the binary
+      # it downloads (herdr/install.sh), and lets anyone else do the same.
+      - name: Write checksums
+        run: cd dist && sha256sum vincent-* > checksums.txt && cat checksums.txt
 
       - name: Create release
         uses: softprops/action-gh-release@v2

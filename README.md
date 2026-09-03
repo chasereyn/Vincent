@@ -133,7 +133,8 @@ go install github.com/chasereyn/vincent@latest
 
 Or download a binary from the
 [Releases page](https://github.com/chasereyn/vincent/releases):
-`vincent-darwin-arm64`, `vincent-linux-amd64`, `vincent-windows-amd64.exe`.
+`vincent-darwin-arm64`, `vincent-darwin-amd64`, `vincent-linux-amd64`,
+`vincent-linux-arm64`, `vincent-windows-amd64.exe`, plus `checksums.txt`.
 
 Or clone and build:
 
@@ -152,6 +153,25 @@ xattr -d com.apple.quarantine ./vincent-darwin-arm64
 
 Requires Go 1.24+ and `git` on PATH to build. No cgo, no runtime, no
 external rendering tools at run time.
+
+### As a herdr plugin
+
+```sh
+herdr plugin install chasereyn/vincent
+herdr plugin action invoke chasereyn.vincent.open
+```
+
+The install step downloads the release binary for your platform and checks
+it against `checksums.txt`, or builds from source when Go is on PATH. The
+`open` action toggles Vincent in its own tab; `open-split` puts it beside
+the current pane. Bind a key:
+
+```toml
+[[keys.command]]
+key = "prefix+v"
+type = "plugin_action"
+command = "chasereyn.vincent.open"
+```
 
 Vincent's review handoff prefers [herdr](https://github.com/herdrdev/herdr),
 a terminal multiplexer for agent panes. Without it — or without an agent
