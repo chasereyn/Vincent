@@ -102,16 +102,16 @@ func TestLeaderArmed_WindowIsGenerous(t *testing.T) {
 // whether the next key is a command or a keystroke depends on a timer you
 // cannot see.
 //
-// The screen is widened to 200 columns because the hint is now generated
-// from the whole leader table and truncated to fit: at the fixture's
-// default 120 the tail (w close · q quit · ? keys) legitimately falls off
-// the end. 200 is the width Vincent actually runs at — it gets a monitor
-// of its own — and it is the only width at which "every binding reached
-// the bar" is a claim the bar can satisfy.
+// The screen is widened well past Vincent's actual 200-column monitor
+// because the hint is now generated from the whole leader table and
+// truncated to fit: at the fixture's default 120 the tail (w close ·
+// q quit · ? keys) legitimately falls off the end, and phase 7's Esc m
+// binding pushed the full table past 200 too. 240 is comfortably past the
+// table's current length; widen it again if a future binding outgrows it.
 func TestStatusBar_ShowsTheLeaderHint(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
 	scr := a.screen.(tcell.SimulationScreen)
-	scr.SetSize(200, 40)
+	scr.SetSize(240, 40)
 	a.width, a.height = scr.Size()
 	a.lastEscape = time.Now()
 	a.draw()
