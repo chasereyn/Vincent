@@ -113,11 +113,16 @@ func (a *App) openCommitBox() {
 		a.reflowPanels()
 		a.refreshGitStatus()
 	}
-	if len(a.gitSnap.Entries) == 0 {
+	// Both refusals are about the ACTIVE repo, not the whole root. In a
+	// folder-of-repos root the folder always has changes somewhere, and a
+	// dirty buffer in beta has nothing to do with committing alpha — see
+	// activeRepo and dirtyTabCountIn.
+	repo := a.activeRepo()
+	if len(a.activeRepoSnapshot().Entries) == 0 {
 		a.flash("Nothing to commit — no changes")
 		return
 	}
-	if n := a.dirtyTabCount(); n > 0 {
+	if n := a.dirtyTabCountIn(repo); n > 0 {
 		a.flash("Save or discard " + dirtyTabCount(n) + " first")
 		return
 	}
@@ -178,13 +183,17 @@ func (a *App) submitCommit() {
 		a.flash("Type a commit message first")
 		return
 	}
-	if n := a.dirtyTabCount(); n > 0 {
+	// Resolved once and reused for both the guard and the command: asking
+	// twice would let the answer change between them, which is how a commit
+	// lands in a repo the guard never checked.
+	repo := a.activeRepo()
+	if n := a.dirtyTabCountIn(repo); n > 0 {
 		a.flash("Save or discard " + dirtyTabCount(n) + " first")
 		return
 	}
 
 	run := a.gitWriter()
-	if _, stderr, err := gitCommitAll(run, a.rootDir, msg); err != nil {
+	if _, stderr, err := gitCommitAll(run, repo, msg); err != nil {
 		review.Logf("git commit: %v\n%s", err, stderr)
 		a.flash(gitFailureSentence("Commit", stderr, err))
 		return
@@ -192,7 +201,7 @@ func (a *App) submitCommit() {
 	// Best-effort: a commit that landed but whose SHA we could not read
 	// back is still a commit, and saying so without the SHA beats
 	// reporting a failure that did not happen.
-	sha, _, err := gitHeadShort(run, a.rootDir)
+	sha, _, err := gitHeadShort(run, repo)
 	if err != nil || sha == "" {
 		sha = "HEAD"
 	}
@@ -305,7 +314,7 @@ func (a *App) drawCommitBox(x, y, w, rows int) int {
 		text  string
 		style tcell.Style
 	}{
-		{fitBorder("┌─ Commit all ", boxW, "┐"), border},
+		{fitBorder("┌─ "+a.commitBoxTitle()+" ", boxW, "┐"), border},
 		{"", textStyle}, // filled in below; the field needs the window
 		{fitBorder("└─ Enter commit · Esc cancel ", boxW, "┘"), border},
 	}
@@ -337,6 +346,20 @@ func (a *App) drawCommitBox(x, y, w, rows int) int {
 	a.commitCaretX = a.lastCommitBox.fieldX + a.commitCursor - a.commitScroll
 	a.commitCaretY = a.lastCommitBox.textY
 	return used
+}
+
+// commitBoxTitle is the label on the box's top border.
+//
+// "Commit all" with one repository, which is what it has always said and
+// what the footer's branch row already qualifies. "Commit to alpha" when
+// the root holds several: the box is three rows above a list that may show
+// files from three repos, and the one thing the reviewer must not have to
+// infer is which of them Enter is about to commit.
+func (a *App) commitBoxTitle() string {
+	if len(a.gitSnap.Repos) <= 1 {
+		return "Commit all"
+	}
+	return "Commit to " + a.activeRepoName()
 }
 
 // showCommitCaret puts the terminal cursor in the box's text field. Called

@@ -122,11 +122,15 @@ func (a *App) openBranchPicker() {
 		a.flash("Not a git repository")
 		return
 	}
-	if n := a.dirtyTabCount(); n > 0 {
+	// The active repo, not the root: in a folder-of-repos root there is no
+	// branch to list at the folder level, and a checkout has to happen in
+	// the same repo the footer names. See activeRepo.
+	repo := a.activeRepo()
+	if n := a.dirtyTabCountIn(repo); n > 0 {
 		a.flash("Save or discard " + dirtyTabCount(n) + " first")
 		return
 	}
-	names, stderr, err := gitBranches(a.gitWriter(), a.rootDir)
+	names, stderr, err := gitBranches(a.gitWriter(), repo)
 	if err != nil {
 		review.Logf("git for-each-ref: %v\n%s", err, stderr)
 		a.flash(gitFailureSentence("Branch list", stderr, err))
@@ -144,7 +148,7 @@ func (a *App) openBranchPicker() {
 	st.cursor = 0
 	st.scroll = 0
 	st.listScroll = 0
-	st.branches = orderBranchRows(names, a.gitSnap.Branch)
+	st.branches = orderBranchRows(names, a.branchLabel())
 	a.refreshBranchPickerRows()
 }
 
@@ -262,11 +266,12 @@ func (a *App) checkoutBranch(name string) {
 	if name == "" {
 		return
 	}
-	if n := a.dirtyTabCount(); n > 0 {
+	repo := a.activeRepo()
+	if n := a.dirtyTabCountIn(repo); n > 0 {
 		a.flash("Save or discard " + dirtyTabCount(n) + " first")
 		return
 	}
-	if _, stderr, err := gitCheckout(a.gitWriter(), a.rootDir, name); err != nil {
+	if _, stderr, err := gitCheckout(a.gitWriter(), repo, name); err != nil {
 		review.Logf("git checkout %s: %v\n%s", name, err, stderr)
 		a.flash(gitFailureSentence("Checkout", stderr, err))
 		return
