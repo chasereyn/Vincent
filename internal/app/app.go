@@ -2716,17 +2716,25 @@ func (a *App) drawEmptyEditor() {
 		}
 	}
 	cy := ey + eh/2
-	msg1 := "No file open"
-	msg2 := "Click a file in the tree, or press Esc ? for the keys"
-	cx1 := ex + (ew-len([]rune(msg1)))/2
-	for i, r := range msg1 {
-		a.screen.SetContent(cx1+i, cy-1, r, nil, bold)
-	}
-	cx2 := ex + (ew-len([]rune(msg2)))/2
-	for i, r := range msg2 {
-		a.screen.SetContent(cx2+i, cy+1, r, nil, muted)
-	}
+	a.drawCentredClipped(ex, cy-1, ew, "No file open", bold)
+	a.drawCentredClipped(ex, cy+1, ew, "Click a file in the tree, or press Esc ? for the keys", muted)
 	a.screen.HideCursor()
+}
+
+// drawCentredClipped centres s inside the w cells starting at x, and clips
+// it to that span when it is wider. Without the clamp the placeholder text
+// spilled into the file tree on the left and the Changes panel on the right
+// whenever the editor was narrower than the sentence, which the default
+// 60-cell sidebar plus an open panel makes routine on a 120-column window.
+func (a *App) drawCentredClipped(x, y, w int, s string, style tcell.Style) {
+	if w <= 0 {
+		return
+	}
+	start := x + (w-len([]rune(s)))/2
+	if start < x {
+		start = x
+	}
+	drawClipped(a.screen, start, y, x+w-start, s, style)
 }
 
 // drawStatusBar paints the bottom status bar.

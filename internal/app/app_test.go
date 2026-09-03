@@ -2216,3 +2216,39 @@ func rowText(t *testing.T, cells []tcell.SimCell, w, y int) string {
 	}
 	return string(rs)
 }
+
+// TestDrawEmptyEditor_StaysInsideNarrowEditor pins the clamp in
+// drawCentredClipped: with the editor squeezed to a few cells between the
+// sidebar and the Changes panel, the placeholder sentence must not paint
+// into either neighbour.
+func TestDrawEmptyEditor_StaysInsideNarrowEditor(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	scr := a.screen.(tcell.SimulationScreen)
+	// 100 columns: a 60-cell sidebar plus the panel leaves the editor
+	// narrower than the 53-rune hint sentence.
+	scr.SetSize(100, 12)
+	a.width, a.height = 100, 12
+	a.gitPanelShown = true
+	a.reflowPanels()
+	a.tabs = nil
+	ex, _, ew, _ := a.editorRect()
+	if ew >= 53 {
+		t.Fatalf("editor width %d is not narrow enough to exercise the clamp", ew)
+	}
+	a.drawEmptyEditor()
+	scr.Show()
+	cells, w, h := scr.GetContents()
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if x >= ex && x < ex+ew {
+				continue
+			}
+			c := cells[y*w+x]
+			if len(c.Runes) > 0 && c.Runes[0] != ' ' && c.Runes[0] != 0 {
+				// Only the editor rect was painted, so any glyph elsewhere
+				// leaked out of it.
+				t.Fatalf("glyph %q painted at (%d,%d) outside editor rect x=%d w=%d", c.Runes[0], x, y, ex, ew)
+			}
+		}
+	}
+}
