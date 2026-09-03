@@ -202,6 +202,13 @@ func (a *App) resizeGitPanel(target int) {
 // The git panel yields first. The file tree is how you navigate; the
 // Changes list is a convenience you can toggle back with one key.
 func (a *App) reflowPanels() {
+	if a.width <= 0 {
+		// No size yet. New() calls this through applyStartupPanelDefaults
+		// before Run() has read the screen, and clamping against a zero
+		// width collapses both panes to their minimums — which is exactly
+		// what 0.6.1 shipped doing. The first EventResize reflows for real.
+		return
+	}
 	if a.gitPanelShown {
 		a.resizeGitPanel(a.gitPanelWidth)
 	}

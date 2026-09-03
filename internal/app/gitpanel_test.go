@@ -490,3 +490,28 @@ func TestStartupDefault_PanelHiddenOutsideARepo(t *testing.T) {
 			ew, a.width-a.sidebarW())
 	}
 }
+
+// TestReflowPanels_WaitsForAScreenSize pins the 0.6.1 startup bug: with
+// a.width still zero (New runs before Run reads the screen), a reflow must
+// leave both panes at their defaults instead of clamping them to their
+// minimums against a window that does not exist yet.
+func TestReflowPanels_WaitsForAScreenSize(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	a.width, a.height = 0, 0
+	a.gitPanelShown = true
+	a.sidebarWidth, a.gitPanelWidth = defaultSidebarWidth, defaultGitPanelWidth
+
+	a.reflowPanels()
+	if a.sidebarWidth != defaultSidebarWidth || a.gitPanelWidth != defaultGitPanelWidth {
+		t.Fatalf("reflow with no size changed widths to %d/%d, want %d/%d",
+			a.sidebarWidth, a.gitPanelWidth, defaultSidebarWidth, defaultGitPanelWidth)
+	}
+
+	// Once the terminal is wide enough, the defaults survive a real reflow.
+	a.width, a.height = 240, 60
+	a.reflowPanels()
+	if a.sidebarWidth != defaultSidebarWidth || a.gitPanelWidth != defaultGitPanelWidth {
+		t.Fatalf("reflow at 240 columns changed widths to %d/%d, want %d/%d",
+			a.sidebarWidth, a.gitPanelWidth, defaultSidebarWidth, defaultGitPanelWidth)
+	}
+}
