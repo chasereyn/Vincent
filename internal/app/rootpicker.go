@@ -662,7 +662,13 @@ func (a *App) setRoot(path string) bool {
 	a.gitPanelScroll = 0
 	a.lastGitPanelRows = nil
 	a.refreshGitStatus()
-	a.applyStartupPanelDefaults()
+	// Re-clamp the layout, but do NOT re-apply the startup panel default.
+	// "Open the Changes panel in a repo" is an answer about how a session
+	// starts; re-running it here re-opened a panel the user had closed on
+	// purpose, one Esc g ago. The panel's visibility is now the user's
+	// state and a root switch does not have an opinion about it. See
+	// applyStartupPanelDefaults, which is a one-shot for the same reason.
+	a.reflowPanels()
 
 	a.recordRecentRoot(resolved)
 	a.flash("Root: " + displayPath(resolved))
