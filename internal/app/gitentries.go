@@ -169,6 +169,12 @@ func loadSnapshotAs(dir, as string) gitSnapshot {
 	if toplevel == "" {
 		return gitSnapshot{}
 	}
+	// git prints the toplevel with forward slashes on every platform,
+	// Windows included ("C:/Users/..."). Every path comparison in the app
+	// uses filepath-native separators, so without this the multi-repo
+	// matching by Root never hit on Windows and setRoot's snapshot test
+	// failed on the 1.0.0 CI run.
+	toplevel = filepath.Clean(filepath.FromSlash(toplevel))
 	root := toplevel
 	if as != "" {
 		root = filepath.Clean(as)

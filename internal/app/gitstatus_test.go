@@ -298,6 +298,12 @@ func initRepoAt(t *testing.T, dir string) {
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "Test User")
 	gitRun(t, dir, "config", "commit.gpgsign", "false")
+	// Windows git ships with core.autocrlf=true, which rewrites "main\n"
+	// to "main\r\n" on checkout and broke the byte-for-byte read-back in
+	// TestGitCheckout_SwitchesForReal on the 1.0.0 CI run. The fixtures
+	// want git to leave bytes alone, the way .gitattributes makes the real
+	// repo behave.
+	gitRun(t, dir, "config", "core.autocrlf", "false")
 	// macOS 'git init' may print a default-branch hint; force a stable name
 	// so the tests work the same on every host.
 	gitRun(t, dir, "checkout", "-q", "-b", "main")

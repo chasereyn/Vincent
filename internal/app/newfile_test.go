@@ -38,7 +38,10 @@ func TestResolveNewFilePath_RelativeWithSubdir(t *testing.T) {
 // base.
 func TestResolveNewFilePath_AbsoluteIgnoresBase(t *testing.T) {
 	base := filepath.Join(string(os.PathSeparator), "repo", "src")
-	abs := filepath.Join(string(os.PathSeparator), "elsewhere", "foo.go")
+	// A real absolute path: a bare leading separator is not absolute on
+	// Windows (no drive), and filepath.Abs would put it under the cwd's
+	// volume, which is what the 1.0.0 CI run tripped on.
+	abs := filepath.Join(t.TempDir(), "elsewhere", "foo.go")
 	got := resolveNewFilePath(base, abs)
 	if got != filepath.Clean(abs) {
 		t.Fatalf("got %q, want %q", got, filepath.Clean(abs))

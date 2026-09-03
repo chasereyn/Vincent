@@ -314,17 +314,19 @@ func TestSaveEmptyPathIsNoop(t *testing.T) {
 // re-adding a root already in the list moves it to the front rather than
 // appending a duplicate.
 func TestAddRecentRootPromotesAndDedupes(t *testing.T) {
-	sep := string(filepath.Separator)
+	// Real absolute paths: AddRecentRoot runs filepath.Abs, and on Windows
+	// a bare "\one" gains the cwd's drive letter and stops matching.
+	root := t.TempDir()
 	cfg := Config{RecentRoots: []string{
-		filepath.Join(sep, "one"),
-		filepath.Join(sep, "two"),
-		filepath.Join(sep, "three"),
+		filepath.Join(root, "one"),
+		filepath.Join(root, "two"),
+		filepath.Join(root, "three"),
 	}}
-	cfg.AddRecentRoot(filepath.Join(sep, "three"))
+	cfg.AddRecentRoot(filepath.Join(root, "three"))
 	want := []string{
-		filepath.Join(sep, "three"),
-		filepath.Join(sep, "one"),
-		filepath.Join(sep, "two"),
+		filepath.Join(root, "three"),
+		filepath.Join(root, "one"),
+		filepath.Join(root, "two"),
 	}
 	if len(cfg.RecentRoots) != len(want) {
 		t.Fatalf("RecentRoots = %v, want %v", cfg.RecentRoots, want)
@@ -339,16 +341,16 @@ func TestAddRecentRootPromotesAndDedupes(t *testing.T) {
 // TestAddRecentRootCaps verifies the list never grows past maxRecentRoots,
 // so config.json can't balloon over a long-lived install.
 func TestAddRecentRootCaps(t *testing.T) {
-	sep := string(filepath.Separator)
+	root := t.TempDir()
 	var cfg Config
 	for i := 0; i < maxRecentRoots*2; i++ {
-		cfg.AddRecentRoot(filepath.Join(sep, "p"+strconv.Itoa(i)))
+		cfg.AddRecentRoot(filepath.Join(root, "p"+strconv.Itoa(i)))
 	}
 	if len(cfg.RecentRoots) != maxRecentRoots {
 		t.Fatalf("len(RecentRoots) = %d, want %d", len(cfg.RecentRoots), maxRecentRoots)
 	}
 	// Most recent first: the last one added sits at the head.
-	head := filepath.Join(sep, "p"+strconv.Itoa(maxRecentRoots*2-1))
+	head := filepath.Join(root, "p"+strconv.Itoa(maxRecentRoots*2-1))
 	if cfg.RecentRoots[0] != head {
 		t.Fatalf("RecentRoots[0] = %q, want %q", cfg.RecentRoots[0], head)
 	}
