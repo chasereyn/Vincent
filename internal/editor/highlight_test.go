@@ -273,3 +273,63 @@ func TestHighlight_TypeNameVsPlainVariableDiffer(t *testing.T) {
 		t.Error("type name and lowercase variable must not share a style")
 	}
 }
+
+// TestHighlightLang_ResolvesByRegisteredName proves HighlightLang picks a
+// lexer from a fenced code block's language tag directly — "python", not
+// the ".py" extension lexers.Match would need — which is the whole reason
+// this entry point exists apart from Highlight.
+func TestHighlightLang_ResolvesByRegisteredName(t *testing.T) {
+	src := "def f():\n    return 1\n"
+	th := theme.Default()
+
+	got := HighlightLang("python", src, th)
+	lines := strings.Split(src, "\n")
+	if len(got) != len(lines) {
+		t.Fatalf("rows = %d, want %d", len(got), len(lines))
+	}
+	// "def" is a Python keyword; some rune on line 0 must differ from the
+	// plain base style, or the lexer never resolved and everything fell
+	// through to Fallback.
+	base := tcell.StyleDefault.Background(th.BG).Foreground(th.Text)
+	colored := false
+	for _, st := range got[0] {
+		if st != base {
+			colored = true
+		}
+	}
+	if !colored {
+		t.Fatal("no rune on line 0 got a non-base style; the python lexer likely didn't resolve")
+	}
+}
+
+// TestHighlightLang_UnknownLanguageFallsBackToAnalyse proves an
+// unrecognised or empty language tag degrades to content sniffing rather
+// than panicking or returning nothing — the same fallback chain Highlight
+// gives an unrecognised filename.
+func TestHighlightLang_UnknownLanguageFallsBackToAnalyse(t *testing.T) {
+	src := "package main\nfunc main() {}\n"
+	th := theme.Default()
+
+	for _, lang := range []string{"", "totallymadeuplang"} {
+		got := HighlightLang(lang, src, th)
+		lines := strings.Split(src, "\n")
+		if len(got) != len(lines) {
+			t.Fatalf("lang %q: rows = %d, want %d", lang, len(got), len(lines))
+		}
+		for i, ln := range lines {
+			if len(got[i]) != len([]rune(ln)) {
+				t.Errorf("lang %q: row %d len = %d, want %d", lang, i, len(got[i]), len([]rune(ln)))
+			}
+		}
+	}
+}
+
+// TestHighlightLang_EmptyInput mirrors TestHighlight_EmptyInput: a single
+// empty row, never a panic on zero-length source.
+func TestHighlightLang_EmptyInput(t *testing.T) {
+	th := theme.Default()
+	got := HighlightLang("go", "", th)
+	if len(got) != 1 || len(got[0]) != 0 {
+		t.Fatalf("got %#v, want one empty row", got)
+	}
+}
