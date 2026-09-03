@@ -77,6 +77,12 @@ func (a *App) closeAllModals() {
 	// closedAt stamp that makes Esc-o-while-open mean "browse the
 	// machine". See rootpicker.go.
 	a.resetRootPicker()
+	// The branch picker has no such stamp to preserve — Esc b twice is not
+	// a second gesture — so a plain clear is right. The commit box is NOT
+	// closed here: it is a footer field, not a modal, and a modal opening
+	// over it (the agent picker, say) must not throw away a message the
+	// reviewer has typed.
+	a.closeBranchPicker()
 	a.pickerTargets = nil
 	a.pickerText = ""
 	a.findValue = nil
@@ -108,7 +114,7 @@ func (a *App) closeAllModals() {
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
 	return a.cheatsheetOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
-		a.findOpen || a.finderOpen || a.pickerOpen || a.rootPicker.open
+		a.findOpen || a.finderOpen || a.pickerOpen || a.rootPicker.open || a.branchPicker.open
 }
 
 // -----------------------------------------------------------------------------

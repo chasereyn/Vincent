@@ -103,6 +103,28 @@ type frameKey struct {
 	rootPickerCount      int
 	rootPickerQuery      string
 
+	// Branch picker. Same contract as the root picker above: its highlight
+	// follows the pointer, so a motion event that moves it must cost a
+	// frame.
+	branchPickerOpen       bool
+	branchPickerSelected   int
+	branchPickerScroll     int
+	branchPickerListScroll int
+	branchPickerCount      int
+	branchPickerQuery      string
+
+	// The Changes panel footer's commit box. commitOpen changes the
+	// footer's height (gitPanelFooterH), so it changes the whole panel's
+	// layout, and the caret position is visible state of its own.
+	commitOpen   bool
+	commitCursor int
+	commitScroll int
+
+	// pushing is on screen as the "Pushing…" flash, and it comes back from
+	// a goroutine — which posts an event, so this field is here for the
+	// same fail-safe reason the modal bools are.
+	pushing bool
+
 	findOpen   bool
 	findCursor int
 	findScroll int
@@ -166,6 +188,18 @@ func (a *App) frameKey() frameKey {
 		rootPickerListScroll: a.rootPicker.listScroll,
 		rootPickerCount:      len(a.rootPicker.rows),
 		rootPickerQuery:      string(a.rootPicker.query),
+
+		branchPickerOpen:       a.branchPicker.open,
+		branchPickerSelected:   a.branchPicker.selected,
+		branchPickerScroll:     a.branchPicker.scroll,
+		branchPickerListScroll: a.branchPicker.listScroll,
+		branchPickerCount:      len(a.branchPicker.rows),
+		branchPickerQuery:      string(a.branchPicker.query),
+
+		commitOpen:   a.commitOpen,
+		commitCursor: a.commitCursor,
+		commitScroll: a.commitScroll,
+		pushing:      a.pushing,
 
 		findOpen:    a.findOpen,
 		findCursor:  a.findCursor,
