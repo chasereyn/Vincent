@@ -57,8 +57,9 @@ diff, `Esc r` on a line to write a note, `Esc Enter` to drop the batch
 into the agent's prompt. None of the 2026-09-02 work has been seen on a
 real terminal yet — it was built by four agents against simulation-screen
 tests and merged by hand. **The first thing to do next session is run it
-and look.** Then phases 3b (git writes, root switcher), 6b (find/replace,
-new file), 7 (markdown), 8, 9.
+and look.** Phase 6b (find/replace, new file, save-as, triple-click,
+Enter indent) landed 2026-09-03, also unseen on a real terminal. Then
+phases 3b (git writes, root switcher), 7 (markdown), 8, 9.
 
 - **Phase 3, the review loop.** `internal/review` holds the note model,
   the wire format, and the herdr client. A diff tab grows overlay rows for
@@ -76,6 +77,22 @@ new file), 7 (markdown), 8, 9.
 - **Phase 6a, editor safety.** Bracketed paste, and the conflict model in
   `app/conflict.go`: a sticky `Tab.Conflict`, a red dot, and a save that
   refuses with Overwrite / Reload / Cancel / Show diff.
+- **Phase 6b, editor.** `Esc /` grows a second row under the find bar on
+  the first Tab press — `internal/editor/find.go`'s `ReplaceCurrentMatch`
+  (Enter) and `ReplaceAll` (Alt+Enter, one undo step, back-to-front so
+  offsets stay valid) do the work; both refuse with a flash on a
+  read-only tab while search itself stays allowed there. `Esc n` (New
+  File) and `Esc S` (Save As) live in `app/newfile.go` and
+  `app/saveas.go` — New File creates missing parent directories (a
+  deliberate divergence from spice-edit's fileops.go, which refused to),
+  never clobbers an existing path, and Save As confirms before
+  overwriting and retargets `Tab.Path`/`Title`/`Mtime`/the undo-anchor
+  snapshot via the new `Tab.SaveAs`. Triple-click extends the existing
+  double-click machinery to select a whole line (editable tabs only —
+  double-click's word-select stays allowed on a diff, this doesn't), and
+  Enter now carries the current line's leading whitespace onto the new
+  one via `Tab.InsertNewlineIndented`, one undo step for the newline and
+  the indent together.
 
 - **Phase 2, the Changes panel.** Zed's shape, read-only: `Changes (N)`
   header, Tracked and Untracked sections, filename in its status colour
@@ -110,20 +127,6 @@ mutable, a diff or image tab is not. **Guard new mutations on
 found: `Tab.Save()` checked only for images, and a diff tab carries the
 real file's `Path`, so saving one would have written diff text over the
 user's source.
-
-What the editor is missing, from `docs/research/2026-09-02/02-editor.md`:
-
-- **Bracketed paste.** `EnablePaste()` is never called. A pasted escape
-  byte arms the leader and the next `q` quits Vincent mid-paste. Fix this
-  before any other editor work.
-- **A conflict model.** `reconcileOpenTabsWithDisk` (`app.go:790-796`)
-  flashes once when the agent rewrites a dirty file, then advances
-  `tab.Mtime` and forgets. The next save silently overwrites the agent's
-  work. Wanted: a sticky `Tab.Conflict`, a byte comparison against the
-  open snapshot so mtime-only bumps are not conflicts, a red dot, and a
-  save that refuses with Overwrite / Reload / Cancel / Show diff.
-- Find and replace, new file, save-as, `SelectAll` wiring, triple-click
-  line select, indentation carried on Enter.
 
 ## Architecture map
 
@@ -397,7 +400,7 @@ starting its phase.
 | 4 | Render loop: skip no-op motion frames, drain events, git tick off the UI thread | **done** |
 | 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | **done** |
 | 6a | Editor safety: bracketed paste, conflict model | **done** |
-| 6b | Editor: find/replace, new file, save-as, Myers diff | |
+| 6b | Editor: find/replace, new file, save-as, triple-click line select, Enter carries indent | **done** |
 | 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | |
 | 8 | Multi-repo workspace + content search | |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | |
