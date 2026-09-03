@@ -20,9 +20,9 @@ name: Test
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 # Cancel in-flight runs for the same ref when a new push lands. Saves CI
 # minutes when someone pushes a quick fix on top of an in-progress run.
