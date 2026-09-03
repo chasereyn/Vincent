@@ -99,6 +99,21 @@ type frameKey struct {
 	finderScroll   int
 	finderCount    int
 
+	// Content search modal (Esc F). searching/capped/matches/files cover
+	// the footer's three states ("searching…" / "N matches in M files" /
+	// "capped at 2000"), and selected/listScroll follow the pointer the
+	// same way the finder's and root picker's do.
+	searchOpen       bool
+	searchSelected   int
+	searchListScroll int
+	searchCursor     int
+	searchScroll     int
+	searchCount      int
+	searchSearching  bool
+	searchCapped     bool
+	searchMatches    int
+	searchFiles      int
+
 	// Root picker. Its hover highlight follows the pointer, so a motion
 	// event that moves the highlight has to cost a frame — that is the
 	// whole contract of this struct.
@@ -191,6 +206,17 @@ func (a *App) frameKey() frameKey {
 		finderSelected:    a.finderSelected,
 		finderScroll:      a.finderScroll,
 		finderCount:       len(a.finderResults),
+
+		searchOpen:       a.search.open,
+		searchSelected:   a.search.selected,
+		searchListScroll: a.search.listScroll,
+		searchCursor:     a.search.cursor,
+		searchScroll:     a.search.scroll,
+		searchCount:      len(a.search.results),
+		searchSearching:  a.search.searching,
+		searchCapped:     a.search.capped,
+		searchMatches:    a.search.matches,
+		searchFiles:      a.search.files,
 
 		rootPickerOpen:       a.rootPicker.open,
 		rootPickerSelected:   a.rootPicker.selected,

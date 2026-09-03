@@ -72,6 +72,11 @@ func (a *App) closeAllModals() {
 	a.dirtyOpen = false
 	a.findOpen = false
 	a.finderOpen = false
+	// closeSearch rather than a bare flag clear: it cancels any in-flight
+	// engine run and pending debounce timer, which a plain a.search.open
+	// = false would leak (the goroutine would keep running and post
+	// results nobody reads).
+	a.closeSearch()
 	a.pickerOpen = false
 	// resetRootPicker rather than a bare flag clear: it preserves the
 	// closedAt stamp that makes Esc-o-while-open mean "browse the
@@ -114,7 +119,7 @@ func (a *App) closeAllModals() {
 // "is the user mid-task in some overlay surface".
 func (a *App) anyModalOpen() bool {
 	return a.cheatsheetOpen || a.promptOpen || a.confirmOpen || a.contextOpen || a.dirtyOpen ||
-		a.findOpen || a.finderOpen || a.pickerOpen || a.rootPicker.open || a.branchPicker.open
+		a.findOpen || a.finderOpen || a.search.open || a.pickerOpen || a.rootPicker.open || a.branchPicker.open
 }
 
 // -----------------------------------------------------------------------------

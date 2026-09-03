@@ -136,6 +136,24 @@ func (f *Finder) Stats() (State, int, bool) {
 	return f.state, len(f.paths), f.viaGit
 }
 
+// Paths returns a snapshot copy of every indexed path, unranked. Added
+// for Phase 8b's content search, which needs the whole file list to hand
+// to internal/search's worker pool rather than the fuzzy-scored top N
+// that Search returns — content search isn't ranking by filename
+// relevance, it's deciding which files to open and grep. Returns nil
+// (not an empty slice) when the index hasn't been built yet, matching
+// Search's own "nil means not ready" contract.
+func (f *Finder) Paths() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.state == StateIdle || f.state == StateBuilding {
+		return nil
+	}
+	out := make([]string, len(f.paths))
+	copy(out, f.paths)
+	return out
+}
+
 // Result is one scored hit returned by Search. Path is project-
 // relative; MatchedIndexes is the list of rune positions inside
 // Path that matched the query (used by the renderer to highlight
