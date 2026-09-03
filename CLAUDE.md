@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.6.0`
+- Version: `internal/version/version.go`, currently `0.6.1`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
