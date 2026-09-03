@@ -124,8 +124,14 @@ func dirtyFolderSet(dirtyFiles map[string]filetree.GitChangeKind, root string) m
 	return folders
 }
 
-// loadGitLineChanges returns line-level worktree changes for path.
-func loadGitLineChanges(rootDir, path string) map[int]editor.GitLineChange {
+// loadGitLineChanges returns line-level worktree changes for spec, read in
+// repo.
+//
+// The pair comes from App.gitPathFor: the owning repository and the
+// pathspec to ask it about. Either being empty means there is nothing to
+// ask — no repo owns the file — and the gutter stays blank.
+func loadGitLineChanges(repo, spec string) map[int]editor.GitLineChange {
+	rootDir, path := repo, spec
 	if rootDir == "" || path == "" {
 		return nil
 	}

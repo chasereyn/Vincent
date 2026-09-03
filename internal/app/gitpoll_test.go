@@ -227,7 +227,7 @@ func TestRunGitPoll_NonRepoDegrades(t *testing.T) {
 	res := runGitPoll(gitPollRequest{
 		rootDir: dir,
 		tree:    true,
-		targets: []gitPollTarget{{path: path, text: true}},
+		targets: []gitPollTarget{{path: path, repo: dir, spec: path, text: true}},
 	})
 	if res.snap.IsRepo {
 		t.Error("a bare temp dir reported as a git repo")
@@ -252,7 +252,7 @@ func TestPollFile_MissingVsError(t *testing.T) {
 	dir := t.TempDir()
 	gone := filepath.Join(dir, "never-existed.txt")
 
-	got := pollFile(dir, gitPollTarget{path: gone, text: true})
+	got := pollFile(gitPollTarget{path: gone, repo: dir, spec: gone, text: true})
 	if !got.missing {
 		t.Error("a nonexistent path did not come back as missing")
 	}

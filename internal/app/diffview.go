@@ -34,13 +34,20 @@ import (
 	"github.com/chasereyn/vincent/internal/filetree"
 )
 
-// loadDiffRows returns the parsed diff for path, and whether git had
+// loadDiffRows returns the parsed diff for spec, and whether git had
 // anything to say about it at all.
+//
+// repo is the directory to run in and spec the pathspec to ask about —
+// gitPathFor produces the pair, which is repo-relative in a
+// folder-of-repos root and the plain absolute path when the root is itself
+// the repo. An empty repo means no repository owns the file and there is
+// nothing to run.
 //
 // ok=false means "no changes" — an unmodified tracked file, a path outside
 // the repo, or git not being available. The caller flashes that; it is not
 // an error state.
-func loadDiffRows(rootDir, path string) ([]diff.Row, bool) {
+func loadDiffRows(repo, spec string) ([]diff.Row, bool) {
+	rootDir, path := repo, spec
 	if rootDir == "" || path == "" {
 		return nil, false
 	}
@@ -117,7 +124,16 @@ func (a *App) openDiff(path string) {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
-	rows, ok := loadDiffRows(a.rootDir, path)
+	// Which repo the file belongs to decides where the diff is read. A
+	// file that belongs to none — one sitting beside the repos in a
+	// folder-of-repos root — has no diff to show, and saying so is more
+	// useful than "No changes", which would imply it was clean.
+	repo, spec := a.gitPathFor(path)
+	if repo == "" {
+		a.flash(fmt.Sprintf("%s is not in a git repository", filepath.Base(path)))
+		return
+	}
+	rows, ok := loadDiffRows(repo, spec)
 	if !ok {
 		a.flash(fmt.Sprintf("No changes in %s", filepath.Base(path)))
 		return

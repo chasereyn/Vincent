@@ -74,6 +74,15 @@ func (e *gitPollEvent) When() time.Time { return e.when }
 // happened to be opened second.
 type gitPollTarget struct {
 	path string
+
+	// repo is the directory the git reads for this path run in, and spec
+	// is the pathspec to hand them — both resolved on the UI thread by
+	// gitPathFor, because working out which repo owns a path means reading
+	// a.repos and the worker owns none of it. repo == "" means no repo
+	// owns the file and the worker must not shell out for it at all.
+	repo string
+	spec string
+
 	text bool
 	diff bool
 }
@@ -82,6 +91,14 @@ type gitPollTarget struct {
 type gitPollRequest struct {
 	rootDir string
 	tree    bool // false in single-file mode: no whole-repo status to read
+
+	// repos is the multi-repo registry as it stood when the request was
+	// built (phase 8a). By value, like everything else here — the worker
+	// must not read a.repos while the UI thread may be rebuilding it.
+	// Empty means "let git walk up from rootDir", which is the pre-8a
+	// behaviour and still the answer for a root inside a repo.
+	repos []string
+
 	targets []gitPollTarget
 }
 
@@ -155,7 +172,7 @@ func (a *App) startGitPoll() bool {
 // per distinct path. UI thread only — this is the one place that reads
 // a.tabs on behalf of the poller.
 func (a *App) buildGitPollRequest() gitPollRequest {
-	req := gitPollRequest{rootDir: a.rootDir, tree: a.tree != nil}
+	req := gitPollRequest{rootDir: a.repoRoot(), tree: a.tree != nil, repos: a.repos}
 	at := map[string]int{} // path -> index into req.targets
 	for _, tab := range a.tabs {
 		if tab == nil || tab.Path == "" || tab.IsImage() {
@@ -163,7 +180,8 @@ func (a *App) buildGitPollRequest() gitPollRequest {
 		}
 		idx, seen := at[tab.Path]
 		if !seen {
-			req.targets = append(req.targets, gitPollTarget{path: tab.Path})
+			repo, spec := a.gitPathFor(tab.Path)
+			req.targets = append(req.targets, gitPollTarget{path: tab.Path, repo: repo, spec: spec})
 			idx = len(req.targets) - 1
 			at[tab.Path] = idx
 		}
@@ -181,18 +199,27 @@ func (a *App) buildGitPollRequest() gitPollRequest {
 func runGitPoll(req gitPollRequest) gitPollResult {
 	res := gitPollResult{files: make(map[string]gitPollFile, len(req.targets))}
 	if req.tree && req.rootDir != "" {
-		// The single `git status` parse both the tree and the Changes panel
-		// derive from. See gitentries.go.
-		res.snap = loadGitSnapshot(req.rootDir)
+		// The `git status` parse both the tree and the Changes panel derive
+		// from — once per repo under the root, merged, on at most
+		// repoStatusWorkers goroutines. See gitentries.go for the parse and
+		// multirepo.go for the fan-out. Still one gitPollEvent at the end:
+		// the UI thread applies one complete picture or none.
+		res.snap = loadReposSnapshot(req.rootDir, req.repos)
 	}
 	for _, target := range req.targets {
-		res.files[target.path] = pollFile(req.rootDir, target)
+		res.files[target.path] = pollFile(target)
 	}
 	return res
 }
 
-// pollFile stats one path and runs whichever git reads its tabs want.
-func pollFile(rootDir string, target gitPollTarget) gitPollFile {
+// pollFile stats one path and runs whichever git reads its tabs want, in
+// the repo that owns it.
+//
+// The stat always happens — a tab still has to notice its file changing on
+// disk even when the file is in no repository at all. The two git reads are
+// skipped in that case, because there is no repo to run them in and
+// running them in an unrelated one would answer about the wrong tree.
+func pollFile(target gitPollTarget) gitPollFile {
 	out := gitPollFile{}
 	info, err := os.Stat(target.path)
 	switch {
@@ -203,11 +230,14 @@ func pollFile(rootDir string, target gitPollTarget) gitPollFile {
 	default:
 		out.statErr = true
 	}
+	if target.repo == "" {
+		return out
+	}
 	if target.text {
-		out.lines = loadGitLineChanges(rootDir, target.path)
+		out.lines = loadGitLineChanges(target.repo, target.spec)
 	}
 	if target.diff {
-		out.rows, out.rowsOK = loadDiffRows(rootDir, target.path)
+		out.rows, out.rowsOK = loadDiffRows(target.repo, target.spec)
 	}
 	return out
 }

@@ -163,6 +163,20 @@ type App struct {
 	tabs      []*editor.Tab
 	activeTab int
 
+	// repos is the multi-repo registry: every git repository at or under
+	// the root, absolute and sorted (repos.Discover). One element equal to
+	// the root means the root IS the repo — the at-home case, which every
+	// helper in multirepo.go short-circuits so it behaves exactly as it did
+	// before phase 8a. Empty means single-file mode, or a root that is
+	// itself inside a repo, and git is left to walk up from rootDir.
+	repos []string
+
+	// gitPanelRepo is the repo owning the last Changes-panel row the user
+	// clicked. It is the third rule in activeRepo's precedence, and it is a
+	// CLICK rather than a hover on purpose: a pointer drifting across
+	// another repo's rows must not re-aim an armed commit box.
+	gitPanelRepo string
+
 	// activeFolder is the directory the editor is currently "working
 	// in". It updates whenever the user clicks a folder in the tree,
 	// opens a file (parent dir wins), or right-clicks a folder. See
@@ -385,6 +399,7 @@ type App struct {
 	composerTab     *editor.Tab
 	composerRow     int
 	composerFile    string
+	composerRepo    string
 	composerSide    review.Side
 	composerStart   int
 	composerEnd     int
@@ -659,12 +674,19 @@ func (a *App) refreshGitStatus() {
 		a.refreshGitLineChanges()
 		return
 	}
-	// ONE `git status` run feeds both consumers. The tree wants a
+	// The registry first: which repos are under the root decides where
+	// every read below runs. Cheap (a shallow filesystem walk, no forks)
+	// and it has to be current, because a repo cloned into the folder is
+	// a repo whose changes belong in the panel.
+	a.refreshRepos()
+	// ONE `git status` run PER REPO feeds both consumers. The tree wants a
 	// path -> kind map and the panel wants an ordered list, which is
 	// exactly the difference that tempts you into a second run and a
 	// second parser — and then they drift, and a file is orange in the
-	// tree but missing from the panel.
-	a.applyGitSnapshot(loadGitSnapshot(a.rootDir))
+	// tree but missing from the panel. loadReposSnapshot merges the
+	// per-repo reads and collapses to the plain single-repo call when the
+	// root is itself a repo.
+	a.applyGitSnapshot(loadReposSnapshot(a.repoRoot(), a.repos))
 	a.refreshGitLineChanges()
 }
 
@@ -684,22 +706,35 @@ func (a *App) applyGitSnapshot(snap gitSnapshot) {
 	if !snap.IsRepo {
 		a.tree.DirtyFiles = nil
 		a.tree.DirtyFolders = nil
+		a.tree.RepoBranches = nil
 		a.gitBranch = ""
 		return
 	}
 	dirtyFiles := rebaseGitPaths(snap.DirtyFiles(), a.tree.Root.Path)
 	a.tree.DirtyFiles = dirtyFiles
+	// The rollup walks every ancestor up to the root, so a repo folder in a
+	// folder-of-repos root is coloured by its own contents for free.
 	a.tree.DirtyFolders = dirtyFolderSet(dirtyFiles, a.tree.Root.Path)
+	// The tree draws a repo folder's branch beside its name. Built from the
+	// snapshot, never shelled out from the tree package — filetree stays
+	// pure. Empty in single-repo mode, where the footer already says it.
+	a.tree.RepoBranches = a.repoBranchMap()
 	a.gitBranch = snap.Branch
 }
 
-// refreshGitLineChanges refreshes gutter markers for every open text tab.
+// refreshGitLineChanges refreshes gutter markers for every open text tab,
+// each read in the repo that owns its file.
+//
+// A tab whose file belongs to no repo — one sitting beside the repos in a
+// folder-of-repos root — gets nil markers rather than a diff read against
+// an unrelated repo.
 func (a *App) refreshGitLineChanges() {
 	for _, tab := range a.tabs {
 		if tab == nil || tab.Path == "" || tab.IsImage() {
 			continue
 		}
-		tab.GitLines = loadGitLineChanges(a.rootDir, tab.Path)
+		dir, spec := a.gitPathFor(tab.Path)
+		tab.GitLines = loadGitLineChanges(dir, spec)
 	}
 }
 
@@ -849,6 +884,11 @@ func (a *App) handleEvent(ev tcell.Event) {
 // by applyGitPoll. See gitpoll.go.
 func (a *App) refreshTreeNow() {
 	a.refreshTree()
+	// The registry is rebuilt here, on the UI thread, beside the tree
+	// rescan it costs the same order as: a repo cloned into a
+	// folder-of-repos root has to show up without a restart, and the poll
+	// request built below carries the list by value.
+	a.refreshRepos()
 	a.startGitPoll()
 	a.invalidateFinder()
 }
@@ -2809,8 +2849,8 @@ func (a *App) drawStatusBar() {
 	// first so the left-side text can be clipped against it and the two
 	// pieces never overlap on a narrow window.
 	var rightWidth int
-	if a.gitBranch != "" {
-		right := " " + a.gitBranch + " "
+	if b := a.branchLabel(); b != "" {
+		right := " " + b + " "
 		rw := len([]rune(right))
 		if rw < sw {
 			drawAt(a.screen, sx+sw-rw, sy, right, style)

@@ -351,5 +351,6 @@ func TestHasDiffableTab(t *testing.T) {
 // doing it through the real pollFile keeps these tests exercising the actual
 // git reads rather than a hand-built fixture.
 func pollDiffTab(a *App, tab *editor.Tab) gitPollFile {
-	return pollFile(a.rootDir, gitPollTarget{path: tab.Path, diff: true})
+	repo, spec := a.gitPathFor(tab.Path)
+	return pollFile(gitPollTarget{path: tab.Path, repo: repo, spec: spec, diff: true})
 }
