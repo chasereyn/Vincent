@@ -211,6 +211,7 @@ type App struct {
 	statusUntil  time.Time
 	dragMode     string // "editor" while a drag-select is active.
 	lastClick    clickRecord
+	clickCount   int // consecutive presses at lastClick's position: 1=single, 2=double, 3=triple.
 	lastTabRects []tabRect
 
 	// lastShiftAt is the wall-clock time we last saw any mouse event
@@ -279,15 +280,27 @@ type App struct {
 	contextItems []contextItem
 	contextHover int
 
-	// Find bar — opened with Esc-f or the "Find in file" menu entry. The
-	// bar is a 1-row strip pinned above the status bar; while it's open
-	// it owns the keyboard. The active tab carries the query and match
-	// list (see editor.Tab.SetFindQuery), so each tab remembers its own
-	// search across closes / reopens.
+	// Find bar — opened with Esc-/ or the "Find in file" menu entry. The
+	// bar is a strip pinned above the status bar; while it's open it owns
+	// the keyboard. The active tab carries the query and match list (see
+	// editor.Tab.SetFindQuery), so each tab remembers its own search
+	// across closes / reopens.
 	findOpen   bool
 	findValue  []rune
 	findCursor int
 	findScroll int
+
+	// Replace row. Hidden (and the bar is one row tall) until the first
+	// Tab press inside the bar, which both reveals it and gives it focus
+	// — see handleFindKey. findReplaceFocus false routes keystrokes to
+	// the find field above; true routes them here. Both reset on every
+	// open/close so each Esc-/ starts collapsed, same as the find field
+	// itself always starting empty.
+	findReplaceVisible bool
+	findReplaceFocus   bool
+	findReplaceValue   []rune
+	findReplaceCursor  int
+	findReplaceScroll  int
 
 	// Auto-scroll while drag-selecting past the editor's top/bottom edge.
 	// lastDragX/Y is the most recent mouse position so the auto-scroll
@@ -974,13 +987,14 @@ func (a *App) tabBarRect() (x, y, w, h int) {
 
 // editorRect returns the editor body's screen rectangle (everything to the
 // right of the sidebar, between the tab bar and the status bar). When the
-// find bar is open, one row is taken out of the bottom — the bar is
-// pinned directly above the status bar.
+// find bar is open, findBarHeight()'s rows are taken out of the bottom —
+// the bar is pinned directly above the status bar, and grows by one row
+// once the replace field is revealed.
 func (a *App) editorRect() (x, y, w, h int) {
 	sw := a.sidebarW()
 	h = a.height - 2
 	if a.findOpen {
-		h -= findBarHeight
+		h -= a.findBarHeight()
 	}
 	return sw, 1, a.width - sw - a.gitPanelW(), h
 }
@@ -1157,7 +1171,7 @@ func (a *App) handleKey(ev *tcell.EventKey) {
 func (a *App) applyEditKey(tab *editor.Tab, ev *tcell.EventKey) {
 	switch ev.Key() {
 	case tcell.KeyEnter:
-		tab.InsertString("\n")
+		tab.InsertNewlineIndented()
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		tab.Backspace()
 	case tcell.KeyDelete:
@@ -1604,12 +1618,30 @@ func (a *App) editorPress(x, y int) {
 
 	now := time.Now()
 	if a.lastClick.x == x && a.lastClick.y == y && now.Sub(a.lastClick.when) < doubleClickMs {
-		a.selectWordAt(tab, pos)
-		a.lastClick = clickRecord{} // prevent triple-click from selecting nothing.
-		return
+		a.clickCount++
+	} else {
+		a.clickCount = 1
+	}
+	if a.clickCount > 3 {
+		// A fourth rapid click at the same spot starts the cycle over
+		// rather than repeating "select line" forever, matching what GUI
+		// editors do: click, double, triple, click again.
+		a.clickCount = 1
 	}
 	a.lastClick = clickRecord{x: x, y: y, when: now}
-	tab.MoveCursorTo(pos, false)
+
+	switch {
+	case a.clickCount == 2:
+		a.selectWordAt(tab, pos)
+	case a.clickCount == 3 && !tab.ReadOnly():
+		// Restricted to editable tabs, unlike double-click word-select
+		// (which is a read-only convenience useful on a diff too): triple-
+		// click line-select is the entry point to "select the line, then
+		// retype it", and a diff tab has no line to retype.
+		a.selectLineAt(tab, pos)
+	default:
+		tab.MoveCursorTo(pos, false)
+	}
 }
 
 // openGitHunkAt opens the file's inline diff, scrolled to the clicked line,
@@ -1780,6 +1812,24 @@ func (a *App) selectWordAt(tab *editor.Tab, p editor.Position) {
 	}
 	tab.Anchor = editor.Position{Line: p.Line, Col: start}
 	tab.Cursor = editor.Position{Line: p.Line, Col: end}
+}
+
+// selectLineAt selects the whole line at p — a triple-click, one step past
+// selectWordAt's double-click word select. The selection runs from column
+// 0 of the line through column 0 of the *next* line (i.e. it includes the
+// trailing newline) whenever there is a next line, so typing after a
+// triple-click cleanly replaces the entire line rather than leaving a
+// blank line behind. On the buffer's last line, which has no trailing
+// newline to take, the selection stops at that line's own end instead.
+func (a *App) selectLineAt(tab *editor.Tab, p editor.Position) {
+	last := tab.Buffer.LineCount() - 1
+	if p.Line < last {
+		tab.Anchor = editor.Position{Line: p.Line, Col: 0}
+		tab.Cursor = editor.Position{Line: p.Line + 1, Col: 0}
+		return
+	}
+	tab.Anchor = editor.Position{Line: p.Line, Col: 0}
+	tab.Cursor = editor.Position{Line: p.Line, Col: len(tab.Buffer.LineRunes(p.Line))}
 }
 
 // isWordChar reports whether r is part of a "word" for double-click select.

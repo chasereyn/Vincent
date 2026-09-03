@@ -956,6 +956,96 @@ func TestEditorPress_DoubleClickSelectsWord(t *testing.T) {
 	}
 }
 
+// TestEditorPress_TripleClickSelectsLine drives three rapid presses at
+// the same spot and checks the selection covers the whole line, including
+// the trailing newline (so a retype cleanly replaces it) — one step past
+// TestEditorPress_DoubleClickSelectsWord's word select.
+func TestEditorPress_TripleClickSelectsLine(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "p.txt")
+	if err := os.WriteFile(target, []byte("hello world\nsecond line\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	ex, ey, _, _ := a.editorRect()
+	a.editorPress(ex+2, ey)
+	a.editorPress(ex+2, ey)
+	a.editorPress(ex+2, ey)
+	tab := a.activeTabPtr()
+	if tab.Anchor != (editor.Position{Line: 0, Col: 0}) {
+		t.Fatalf("anchor should be column 0 of the clicked line, got %+v", tab.Anchor)
+	}
+	if tab.Cursor != (editor.Position{Line: 1, Col: 0}) {
+		t.Fatalf("cursor should include the trailing newline (line 1 col 0), got %+v", tab.Cursor)
+	}
+}
+
+// TestEditorPress_TripleClickOnLastLineStopsAtLineEnd checks the no-
+// trailing-newline edge case: the buffer's last line has nothing after it
+// to include in the selection.
+func TestEditorPress_TripleClickOnLastLineStopsAtLineEnd(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "p.txt")
+	if err := os.WriteFile(target, []byte("only line"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	ex, ey, _, _ := a.editorRect()
+	a.editorPress(ex+2, ey)
+	a.editorPress(ex+2, ey)
+	a.editorPress(ex+2, ey)
+	tab := a.activeTabPtr()
+	if tab.Anchor != (editor.Position{Line: 0, Col: 0}) || tab.Cursor != (editor.Position{Line: 0, Col: len("only line")}) {
+		t.Fatalf("expected the whole (last) line selected without a next line, got anchor=%+v cursor=%+v",
+			tab.Anchor, tab.Cursor)
+	}
+}
+
+// TestEditorPress_TripleClickRefusedOnDiffTab checks the deliberate
+// asymmetry with double-click: word-select stays allowed on a read-only
+// diff tab, but the newer triple-click line-select does not, since a diff
+// has no line to retype.
+func TestEditorPress_TripleClickRefusedOnDiffTab(t *testing.T) {
+	a := newTestApp(t, t.TempDir())
+	tab := editor.NewDiffTab("x.go", diff.Parse("@@ -1 +1 @@\n-a\n+b\n"))
+	a.tabs = []*editor.Tab{tab}
+	a.activeTab = 0
+	ex, ey, _, _ := a.editorRect()
+
+	a.editorPress(ex, ey)
+	a.editorPress(ex, ey)
+	a.editorPress(ex, ey)
+
+	if tab.HasSelection() {
+		t.Fatalf("triple-click should not select a line on a read-only tab, got anchor=%+v cursor=%+v",
+			tab.Anchor, tab.Cursor)
+	}
+}
+
+// TestEditorPress_FourthClickRestartsTheCycle checks the click count
+// wraps back to a plain cursor placement rather than repeating
+// select-line forever.
+func TestEditorPress_FourthClickRestartsTheCycle(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "p.txt")
+	if err := os.WriteFile(target, []byte("hello world\nsecond line\n"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	ex, ey, _, _ := a.editorRect()
+	for i := 0; i < 4; i++ {
+		a.editorPress(ex+2, ey)
+	}
+	tab := a.activeTabPtr()
+	if tab.HasSelection() {
+		t.Fatalf("a fourth rapid click should restart at plain cursor placement, got a selection anchor=%+v cursor=%+v",
+			tab.Anchor, tab.Cursor)
+	}
+}
+
 // TestEditorPress_NoTabSafe doesn't panic with no active tab.
 func TestEditorPress_NoTabSafe(t *testing.T) {
 	a := newTestApp(t, t.TempDir())
@@ -1025,6 +1115,29 @@ func TestHandleKey_RoutesToActiveTab(t *testing.T) {
 	a.handleKey(keyEv(tcell.KeyPgUp, 0))
 	a.handleKey(keyEv(tcell.KeyPgDn, 0))
 	a.handleKey(keyEv(tcell.KeyDelete, 0))
+}
+
+// TestApplyEditKey_EnterCarriesIndent wires the app's Enter handler to
+// editor.Tab.InsertNewlineIndented — regression coverage for the app
+// layer specifically, since it would be easy for a future edit to
+// applyEditKey to revert to a plain InsertString("\n") without any
+// editor-package test noticing.
+func TestApplyEditKey_EnterCarriesIndent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "t.txt")
+	if err := os.WriteFile(target, []byte("    foo"), 0644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	a := newTestApp(t, dir)
+	a.openFile(target)
+	tab := a.activeTabPtr()
+	tab.MoveCursorTo(editor.Position{Line: 0, Col: 7}, false)
+
+	a.handleKey(keyEv(tcell.KeyEnter, 0))
+
+	if got := tab.Buffer.Lines; len(got) != 2 || got[1] != "    " {
+		t.Fatalf("lines = %+v, want a second line carrying the 4-space indent", got)
+	}
 }
 
 // resizedApp builds a test app at (w, h) and drives one real resize
