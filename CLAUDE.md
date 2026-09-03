@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.6.6`
+- Version: `internal/version/version.go`, currently `1.0.0`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -59,8 +59,12 @@ into the agent's prompt. Version 0.4.0 followed the first real session
 Phases 3b (git writes), 6b (find/replace, new file, save-as,
 triple-click, Enter indent) and 7 (markdown) landed on 2026-09-03 as
 version 0.5.0. Phase 8 (multi-repo, `Esc F` content search, in-process
-Myers diff) followed the same day as 0.6.0. None of 0.5.0 or 0.6.0 has
-been seen on a real terminal. Phase 9, shipping, is what remains.
+Myers diff) followed the same day as 0.6.0. Chase used 0.6.x on a real
+terminal that afternoon: the review loop ("works pretty good, I love it"),
+the Changes panel with three repos, the root and branch pickers, rendered
+markdown, and the tree are all confirmed. Commit, push, checkout, find in
+files, and the 6b editor additions have not been watched yet. Phase 9
+shipped as 1.0.0 the same evening.
 
 - **Phase 8a, multi-repo.** The root does not have to be a repository any
   more. `internal/repos` discovers every repo at or under it and
@@ -566,14 +570,14 @@ starting its phase.
 | 0 | Fork, strip, blacken | **done** |
 | 1 | Inline (Zed-style) diff viewer | **done** |
 | 2 | Zed-shaped read-only git panel | **done** |
-| 3 | Review notes + herdr/clipboard handoff, legend in the batch | **done**, unseen on a real terminal |
-| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | **done**, unseen on a real terminal |
+| 3 | Review notes + herdr/clipboard handoff, legend in the batch | **done**, confirmed on a real terminal 2026-09-03 |
+| 3b | Git writes off the panel footer: checkout, commit-all, push. Root switcher (`Esc o`) | **done**; pickers seen, the three writes not yet watched |
 | 4 | Render loop: skip no-op motion frames, drain events, git tick off the UI thread | **done** |
 | 5 | Chrome: Ayu Darker palette, Zed-style tree rows, indent guides, tab bar toggle, menu trim, `NameOther` colouring | **done** |
 | 6a | Editor safety: bracketed paste, conflict model | **done** |
 | 6b | Editor: find/replace, new file, save-as, triple-click line select, Enter carries indent | **done** |
 | 7 | Markdown renderer (goldmark AST -> tcell, a `Tab.Mode`) | **done** |
-| 8 | Multi-repo workspace + content search (`Esc F`) + in-process Myers diff | **done**, unseen on a real terminal |
+| 8 | Multi-repo workspace + content search (`Esc F`) + in-process Myers diff | **done**; grouping seen, search not yet watched |
 | 9 | Ship: README, releases via Actions, lock contributions, explainers | **done**, except Buy Me a Coffee — Chase dropped that item |
 
 **Phase 8 is still wanted; do not trim it because `Esc o` exists.** Confirmed
