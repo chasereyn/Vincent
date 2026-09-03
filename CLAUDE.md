@@ -486,12 +486,22 @@ Things worth knowing before changing any of it:
   `git ls-files --error-unmatch` says the file is untracked — running the
   fallback unconditionally renders every clean file as one huge addition.
 - **Word-level tint pairs runs of deletions with the run of additions that
-  follows**, then compares common prefix/suffix. It is a heuristic, not a
-  character diff; a pair sharing nothing is left untinted rather than
-  claiming the whole line changed.
+  follows**, then runs a token-level Myers diff on each pair (tokens: runs
+  of letters/digits/underscore, runs of whitespace, single punctuation) and
+  tints the span from the first changed token to the last. `internal/diff/myers.go`
+  has the diff engine; `assignPrefixSuffixRange` in `diff.go` is the old
+  prefix/suffix guess, now only a fallback for a pair too big to be worth
+  diffing token-by-token (either line over 400 runes, or either side over
+  200 tokens) — a pair sharing no token at all still falls back the same
+  way, and that heuristic already tints nothing for it.
 - `git diff` output ends in a newline, so the final element of the split is
   a terminator, not a line. Dropping it is what keeps the trailing line
   numbers correct.
+- **Show diff** (the conflict prompt's buffer-vs-disk button, `conflict.go`)
+  is also in-process now: `diff.Unified` builds the unified-diff text
+  directly from the buffer and the on-disk bytes, no `git diff --no-index`
+  shell-out and no temp file. That is what lets it work on a file outside
+  any git repo at all.
 
 `gitstatus.go` keeps `parseHunkHeader` / `parseDiffRange` for the editor's
 gutter markers. Its `loadGitHunkPreview` / `parseGitHunkPreview` /
