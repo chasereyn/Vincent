@@ -102,11 +102,11 @@ func TestRenderMarkdown_HeadingIsBold(t *testing.T) {
 	path := writeMarkdownFile(t, "# Title\n")
 	_, scr := newMarkdownScreen(t, path, 40, 5)
 
-	if got := rowText(t, scr, 0); got != "Title" {
-		t.Fatalf("row 0 = %q, want %q", got, "Title")
+	if got := rowText(t, scr, 0); got != "  Title" {
+		t.Fatalf("row 0 = %q, want %q (two-cell margin, then the heading)", got, "  Title")
 	}
 	cells, w, _ := scr.GetContents()
-	st := cells[0*w+0].Style
+	st := cells[0*w+markdownGutter].Style
 	gotFG, _, attr := st.Decompose()
 	if attr&tcell.AttrBold == 0 {
 		t.Fatal("heading cell is not bold")
@@ -164,16 +164,31 @@ func TestRenderMarkdown_LinkIsUnderlinedInSynProperty(t *testing.T) {
 }
 
 // TestRenderMarkdown_NoGutter proves gutterCells is 0 for a markdown tab
-// — content starts at the pane's own column 0, not offset by a line
-// number column the way text and diff tabs are.
+// — there is no line-number column the way text and diff tabs have — and
+// that the content sits exactly markdownGutter cells in: a margin, not a
+// gutter, so the hit-tester and the painter agree on the same constant.
 func TestRenderMarkdown_NoGutter(t *testing.T) {
 	path := writeMarkdownFile(t, "hello\n")
 	tab, scr := newMarkdownScreen(t, path, 40, 5)
 	if got := tab.gutterCells(); got != 0 {
 		t.Fatalf("gutterCells() = %d, want 0", got)
 	}
-	if got := rowText(t, scr, 0); got != "hello" {
-		t.Fatalf("row 0 = %q, want content flush against column 0", got)
+	want := strings.Repeat(" ", markdownGutter) + "hello"
+	if got := rowText(t, scr, 0); got != want {
+		t.Fatalf("row 0 = %q, want %q", got, want)
+	}
+}
+
+// TestMarkdownInnerWidth_MarginsGiveWayOnANarrowPane pins the fallback:
+// the two margins come off the wrap width until the pane is too narrow
+// for them to be worth having, at which point the text gets the full
+// width back rather than wrapping into a sliver.
+func TestMarkdownInnerWidth_MarginsGiveWayOnANarrowPane(t *testing.T) {
+	if got := markdownInnerWidth(80); got != 80-2*markdownGutter {
+		t.Fatalf("inner(80) = %d, want %d", got, 80-2*markdownGutter)
+	}
+	if got := markdownInnerWidth(18); got != 18 {
+		t.Fatalf("inner(18) = %d, want the full 18", got)
 	}
 }
 
@@ -211,15 +226,15 @@ func TestRewrapMarkdown_ReflowsOnWidthChange(t *testing.T) {
 func TestSetMarkdownSource_ForcesRewrapOnNextRender(t *testing.T) {
 	path := writeMarkdownFile(t, "# One\n")
 	tab, scr := newMarkdownScreen(t, path, 40, 5)
-	if got := rowText(t, scr, 0); got != "One" {
-		t.Fatalf("row 0 = %q, want %q", got, "One")
+	if got := rowText(t, scr, 0); got != "  One" {
+		t.Fatalf("row 0 = %q, want %q", got, "  One")
 	}
 
 	tab.SetMarkdownSource("# Two\n")
 	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
 	scr.Show()
-	if got := rowText(t, scr, 0); got != "Two" {
-		t.Fatalf("after SetMarkdownSource, row 0 = %q, want %q", got, "Two")
+	if got := rowText(t, scr, 0); got != "  Two" {
+		t.Fatalf("after SetMarkdownSource, row 0 = %q, want %q", got, "  Two")
 	}
 }
 
@@ -229,15 +244,19 @@ func TestMarkdownHitTest_MapsClickToRowAndColumn(t *testing.T) {
 	path := writeMarkdownFile(t, "abcde\n\nfghij\n")
 	tab, _ := newMarkdownScreen(t, path, 40, 10)
 
-	pos, ok := tab.HitTest(2, 0, 40, 10)
+	pos, ok := tab.HitTest(2+markdownGutter, 0, 40, 10)
 	if !ok {
 		t.Fatal("expected a hit on row 0")
 	}
 	if pos != (Position{Line: 0, Col: 2}) {
-		t.Fatalf("hit = %+v, want {0 2}", pos)
+		t.Fatalf("hit = %+v, want {0 2} (click column less the margin)", pos)
+	}
+	// A click inside the left margin lands on column 0, never negative.
+	if pos, ok := tab.HitTest(0, 0, 40, 10); !ok || pos.Col != 0 {
+		t.Fatalf("margin click = %+v ok=%v, want column 0", pos, ok)
 	}
 
-	pos, ok = tab.HitTest(1, 2, 40, 10)
+	pos, ok = tab.HitTest(1+markdownGutter, 2, 40, 10)
 	if !ok {
 		t.Fatal("expected a hit on row 2")
 	}
@@ -262,7 +281,7 @@ func TestRenderMarkdown_FindMatchIsHighlighted(t *testing.T) {
 	scr.Show()
 
 	th := theme.Default()
-	idx := strings.Index("find the needle here", "needle")
+	idx := strings.Index("find the needle here", "needle") + markdownGutter
 	if bg := cellBG(t, scr, idx, 0); bg != th.FindCurrent {
 		t.Fatalf("match background = %v, want FindCurrent %v", bg, th.FindCurrent)
 	}
@@ -337,8 +356,8 @@ func TestToggleMarkdownView_PreservesEditsAcrossRoundTrip(t *testing.T) {
 	scr.SetSize(40, 5)
 	tab.Render(scr, theme.Default(), 0, 0, 40, 5)
 	scr.Show()
-	if got := rowText(t, scr, 0); got != "Edited" {
-		t.Fatalf("rendered row 0 = %q, want the edited heading %q", got, "Edited")
+	if got := rowText(t, scr, 0); got != "  Edited" {
+		t.Fatalf("rendered row 0 = %q, want the edited heading %q", got, "  Edited")
 	}
 
 	tab.ToggleMarkdownView() // -> raw again

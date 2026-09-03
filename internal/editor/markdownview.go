@@ -296,8 +296,9 @@ const codeBlockPad = 1
 // scratch-row/flushRow idiom diffview.go and the text path both use; see
 // flushRow's doc comment for why that isn't just tidiness.
 func (t *Tab) renderMarkdown(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
-	if w != t.markdownWidth {
-		t.rewrapMarkdown(w)
+	inner := markdownInnerWidth(w)
+	if inner != t.markdownWidth {
+		t.rewrapMarkdown(inner)
 	}
 	t.clampScroll(h)
 	if t.StyleStale {
@@ -347,9 +348,9 @@ func (t *Tab) renderMarkdown(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 			return st
 		}
 
-		contentX := x
+		contentX := x + markdownGutter
 		if mdRow.CodeBlock {
-			contentX = x + codeBlockPad
+			contentX = x + markdownGutter + codeBlockPad
 		}
 
 		if mdRow.CodeBlock {
@@ -383,11 +384,29 @@ func (t *Tab) renderMarkdown(scr tcell.Screen, th theme.Theme, x, y, w, h int) {
 	scr.HideCursor()
 }
 
+// markdownGutter is the blank margin, in cells, on each side of rendered
+// markdown. Chase asked for it on 2026-09-03 after reading a CLAUDE.md
+// whose text started flush against the sidebar splitter. It is padding
+// inside the tab, not a line-number gutter: gutterCells() still returns 0
+// for a markdown tab, and the hit-tester subtracts it.
+const markdownGutter = 2
+
+// markdownInnerWidth is the wrap width for a tab w cells wide: w less a
+// gutter on each side, unless the pane is so narrow that the margins
+// would eat the text, in which case the text wins and the margins go.
+func markdownInnerWidth(w int) int {
+	inner := w - 2*markdownGutter
+	if inner < 20 {
+		return w
+	}
+	return inner
+}
+
 // markdownHitTest maps a click inside a markdown tab to a buffer
-// position. There is no gutter and no horizontal scroll to account for —
-// content always starts at column 0 and wraps rather than running off
-// the pane — so this is simpler than the text and diff hit-testers it
-// sits beside.
+// position. There is no line-number gutter and no horizontal scroll to
+// account for — content starts markdownGutter cells in and wraps rather
+// than running off the pane — so this is simpler than the text and diff
+// hit-testers it sits beside.
 func (t *Tab) markdownHitTest(localX, localY, w, h int) (Position, bool) {
 	if localY < 0 || localY >= h {
 		return Position{}, false
@@ -397,7 +416,7 @@ func (t *Tab) markdownHitTest(localX, localY, w, h int) (Position, bool) {
 		return Position{}, false
 	}
 	runes := t.Buffer.LineRunes(line)
-	col := localX
+	col := localX - markdownGutter
 	if col > len(runes) {
 		col = len(runes)
 	}

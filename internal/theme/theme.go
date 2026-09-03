@@ -176,7 +176,11 @@ type Theme struct {
 //     for the purple to be less saturated. All four are #bfaee0 now. Only
 //     SynProperty keeps Ayu's blue, because it is syntax, not chrome, and
 //     SynNumber/SynBuiltin keep the saturated #d2a6ff for the same reason.
-//     Hidden files and folders both dim to Muted.
+//   - FolderColor is plain Text. Chase asked three times on 2026-09-03 for
+//     folders to "just be white"; the first two asks were read as "one
+//     colour" and "purple like the rest". Folder names and glyphs are the
+//     same white as file names. Hidden files dim to Muted; hidden folders
+//     do not, so every folder is one colour.
 //   - The ground is set explicitly via tcell.NewRGBColor rather than
 //     tcell.ColorDefault, which would inherit whatever the host terminal
 //     is using and would not reliably match Ghostty's #030405.
@@ -239,7 +243,7 @@ func Default() Theme {
 		// plain file name is primary content, not secondary UI chrome, and
 		// it has to stay visually distinct from Muted (dotfiles, line
 		// numbers) or the dotfile-dimming cue disappears.
-		FolderColor: tcell.NewRGBColor(0xbf, 0xae, 0xe0), // folders follow Accent
+		FolderColor: tcell.NewRGBColor(0xdf, 0xde, 0xda), // plain Text: folders are not chrome
 		FileColor:   tcell.NewRGBColor(0xdf, 0xde, 0xda),
 
 		// Syntax — Ayu Darker.

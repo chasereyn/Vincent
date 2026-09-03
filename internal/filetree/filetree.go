@@ -419,11 +419,10 @@ func drawNodeRow(scr tcell.Screen, th theme.Theme, x, y, w int, item flatNode, a
 	} else {
 		fg = th.FileColor
 	}
-	if strings.HasPrefix(item.Node.Name, ".") {
-		// Hidden files and folders both dim. This flipped twice on
-		// 2026-09-03: first every folder went one colour, then Chase saw a
-		// home directory full of blue dotfolders and asked for them back
-		// in grey. Grey it is.
+	if strings.HasPrefix(item.Node.Name, ".") && !item.Node.IsDir {
+		// Hidden files dim. Folders never do: after three rounds on
+		// 2026-09-03 the rule Chase wanted is "every folder is plain white
+		// text", hidden or not, and FolderColor is Text to match.
 		fg = th.Muted
 	}
 	if active {

@@ -42,7 +42,7 @@ see `internal/app/pathops.go` for the pattern.
 
 - Module: `github.com/chasereyn/vincent`
 - Binary: `vincent`
-- Version: `internal/version/version.go`, currently `0.6.3`
+- Version: `internal/version/version.go`, currently `0.6.4`
 
 Bump the version when shipping a phase. There is no auto-update, so
 `vincent --version` is the only way to tell whether the binary on PATH is
@@ -337,8 +337,12 @@ preferences:
   (title, rule, root name) and HitTest, hover, and Render all read it.
 - Indent guides end with `└` on a folder's last child and go blank below
   it. `guideSegment` is the whole rule.
-- Hidden files and folders both dim to `Muted`. Hidden folders were
-  briefly the folder colour and Chase asked for grey back.
+- **Folders are plain white text (`FolderColor` = `Text`), hidden or not.**
+  Chase asked three times; the first two asks were misread as "one colour"
+  and then "purple like the rest of the chrome". Hidden files still dim.
+- Rendered markdown has a two-cell margin on each side (`markdownGutter`).
+- With several repos in the Changes panel, the header of the repo that
+  `Esc c` / `Esc P` / `Esc b` will act on is bold and tagged "active".
 - With icons on, files and folders both draw glyph + two spaces + name, so
   siblings start their names in the same column.
 - The Changes panel puts a blank row between repo groups.

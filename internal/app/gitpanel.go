@@ -55,6 +55,10 @@ type gitPanelItem struct {
 	// one repo — with a single repo the panel has exactly the shape it had
 	// before phase 8a, and a header restating the footer would be noise.
 	repoHeader string
+	// repoRoot is the repo a repoHeader row stands for, so the draw can
+	// mark the one activeRepo() points at — the one Esc c, Esc P and Esc b
+	// will act on.
+	repoRoot string
 
 	section string    // non-empty: a section header row
 	entry   *gitEntry // non-nil: a clickable file row
@@ -102,7 +106,7 @@ func (a *App) gitPanelRepoItems() []gitPanelItem {
 			// 2026-09-03 after seeing two repos stacked.
 			items = append(items, gitPanelItem{})
 		}
-		items = append(items, gitPanelItem{repoHeader: gitPanelRepoLabel(snap)})
+		items = append(items, gitPanelItem{repoHeader: gitPanelRepoLabel(snap), repoRoot: snap.Root})
 		items = appendGitPanelSections(items, snap)
 	}
 	return items
@@ -461,7 +465,18 @@ func (a *App) drawGitPanelList(x, y, w, h int) {
 		item := items[idx]
 
 		if item.repoHeader != "" {
-			drawClipped(a.screen, x+1, cy, w-1, item.repoHeader, base.Foreground(th.Accent))
+			// The active repo's header is bold and says so: with three
+			// repos showing changes, "which one does Esc c commit?" has to
+			// be answerable from the panel, not just from the commit box's
+			// label after the fact.
+			style := base.Foreground(th.Accent)
+			if item.repoRoot != "" && item.repoRoot == a.activeRepo() {
+				style = style.Bold(true)
+				n := drawClipped(a.screen, x+1, cy, w-1, item.repoHeader, style)
+				drawClipped(a.screen, x+1+n, cy, w-1-n, "  active", base.Foreground(th.DimText))
+				continue
+			}
+			drawClipped(a.screen, x+1, cy, w-1, item.repoHeader, style)
 			continue
 		}
 		if item.section != "" {
