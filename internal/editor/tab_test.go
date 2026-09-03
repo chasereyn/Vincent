@@ -1241,6 +1241,223 @@ func TestSaveOverwrite_StillRefusesReadOnlyTabs(t *testing.T) {
 	}
 }
 
+// TestSaveAs_WritesRetargetsAndCleans pins Save As's full contract: the
+// buffer lands at the new path, Path/Title/Mtime move to it, the tab
+// reports clean, and the old path is left untouched.
+func TestSaveAs_WritesRetargetsAndCleans(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.txt")
+	newPath := filepath.Join(dir, "sub", "new.txt")
+	if err := os.WriteFile(oldPath, []byte("original\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// SaveAs itself never creates directories — that is New File's job —
+	// so the target directory has to already exist for this test.
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	tab, err := NewTab(oldPath)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	tab.InsertString("edited\n")
+
+	if err := tab.SaveAs(newPath); err != nil {
+		t.Fatalf("SaveAs: %v", err)
+	}
+	if tab.Path != newPath {
+		t.Fatalf("Path = %q, want %q", tab.Path, newPath)
+	}
+	if tab.Title != "" {
+		t.Fatalf("Title should be cleared so DisplayName recomputes, got %q", tab.Title)
+	}
+	if tab.Dirty {
+		t.Fatal("SaveAs should leave the tab clean")
+	}
+	if !tab.Mtime.After(time.Time{}) {
+		t.Fatal("SaveAs should stamp Mtime from the new file")
+	}
+	got, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatalf("read new path: %v", err)
+	}
+	if want := "edited\noriginal\n"; string(got) != want {
+		t.Fatalf("new file contents = %q, want %q", got, want)
+	}
+	oldGot, err := os.ReadFile(oldPath)
+	if err != nil {
+		t.Fatalf("read old path: %v", err)
+	}
+	if string(oldGot) != "original\n" {
+		t.Fatalf("SaveAs must not touch the old path, got %q", oldGot)
+	}
+}
+
+// TestSaveAs_ResetsRevertAnchorButKeepsUndoHistory checks the two halves
+// of "retarget the snapshot": CanRevert reports false right after SaveAs
+// (the just-written content is the new baseline), but an Undo still walks
+// back through the edits made before the SaveAs — Save As doesn't erase
+// typing history, only where the revert anchor points.
+func TestSaveAs_ResetsRevertAnchorButKeepsUndoHistory(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.txt")
+	newPath := filepath.Join(dir, "new.txt")
+	if err := os.WriteFile(oldPath, []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab, err := NewTab(oldPath)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	tab.InsertString("edited\n")
+
+	if err := tab.SaveAs(newPath); err != nil {
+		t.Fatalf("SaveAs: %v", err)
+	}
+	if tab.CanRevert() {
+		t.Fatal("CanRevert should be false immediately after SaveAs — the buffer IS the new original")
+	}
+	if !tab.CanUndo() {
+		t.Fatal("SaveAs should not have discarded the pre-save undo history")
+	}
+	if !tab.Undo() {
+		t.Fatal("Undo should still be able to walk back through the pre-SaveAs edit")
+	}
+	if got := tab.Buffer.String(); got != "base\n" {
+		t.Fatalf("Undo after SaveAs should still restore pre-edit content, got %q", got)
+	}
+}
+
+// TestSaveAs_FailurePreservesOriginalPath checks that a failed write (a
+// missing parent directory) leaves the tab pointing at its old path
+// rather than stranding it against a target that was never written.
+func TestSaveAs_FailurePreservesOriginalPath(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab, err := NewTab(oldPath)
+	if err != nil {
+		t.Fatalf("NewTab: %v", err)
+	}
+	badTarget := filepath.Join(dir, "does-not-exist", "new.txt")
+
+	if err := tab.SaveAs(badTarget); err == nil {
+		t.Fatal("SaveAs into a missing directory should fail")
+	}
+	if tab.Path != oldPath {
+		t.Fatalf("a failed SaveAs must leave Path alone, got %q", tab.Path)
+	}
+}
+
+// TestSaveAs_RefusesReadOnlyTabs mirrors
+// TestSaveOverwrite_StillRefusesReadOnlyTabs: a diff tab must refuse
+// SaveAs too, for the identical "carries the real file's Path" reason.
+func TestSaveAs_RefusesReadOnlyTabs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("real source\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	tab := NewDiffTab(path, nil)
+	target := filepath.Join(dir, "elsewhere.txt")
+
+	if err := tab.SaveAs(target); err == nil {
+		t.Fatal("SaveAs on a diff tab should fail")
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Fatal("SaveAs on a diff tab should not have created the target file")
+	}
+}
+
+// TestInsertNewlineIndented_CarriesLeadingWhitespace checks the headline
+// behaviour: pressing Enter partway through an indented line carries that
+// line's leading whitespace onto the new one.
+func TestInsertNewlineIndented_CarriesLeadingWhitespace(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("    foo bar")
+	tab.Cursor = Position{Line: 0, Col: 8} // right after "foo "
+	tab.Anchor = tab.Cursor
+
+	tab.InsertNewlineIndented()
+
+	want := []string{"    foo ", "    bar"}
+	if !reflect.DeepEqual(tab.Buffer.Lines, want) {
+		t.Fatalf("lines = %+v, want %+v", tab.Buffer.Lines, want)
+	}
+	if tab.Cursor != (Position{Line: 1, Col: 4}) {
+		t.Fatalf("cursor should land after the carried indent, got %+v", tab.Cursor)
+	}
+}
+
+// TestInsertNewlineIndented_TabIndentIsPreserved checks that a tab-indented
+// line carries an actual tab character, not the buffer's space-based
+// IndentUnit — the two are unrelated (this feature copies what's already
+// there, it doesn't consult DetectIndent).
+func TestInsertNewlineIndented_TabIndentIsPreserved(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("\t\tfoo")
+	tab.Cursor = Position{Line: 0, Col: 5}
+	tab.Anchor = tab.Cursor
+
+	tab.InsertNewlineIndented()
+
+	if got := tab.Buffer.Lines[1]; got != "\t\t" {
+		t.Fatalf("second line = %q, want %q", got, "\t\t")
+	}
+}
+
+// TestInsertNewlineIndented_EmptyLineInsertsPlainNewline checks the
+// no-indent case doesn't regress into inserting stray whitespace.
+func TestInsertNewlineIndented_EmptyLineInsertsPlainNewline(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("foo")
+	tab.Cursor = Position{Line: 0, Col: 3}
+	tab.Anchor = tab.Cursor
+
+	tab.InsertNewlineIndented()
+
+	want := []string{"foo", ""}
+	if !reflect.DeepEqual(tab.Buffer.Lines, want) {
+		t.Fatalf("lines = %+v, want %+v", tab.Buffer.Lines, want)
+	}
+}
+
+// TestInsertNewlineIndented_OneUndoStep checks the newline and the carried
+// indent undo together — a single Undo should remove both, restoring the
+// original single line.
+func TestInsertNewlineIndented_OneUndoStep(t *testing.T) {
+	tab, _ := NewTab("")
+	tab.Buffer = NewBuffer("    foo")
+	tab.Cursor = Position{Line: 0, Col: 7}
+	tab.Anchor = tab.Cursor
+
+	tab.InsertNewlineIndented()
+	if !tab.Undo() {
+		t.Fatal("Undo reported nothing to undo")
+	}
+	want := []string{"    foo"}
+	if !reflect.DeepEqual(tab.Buffer.Lines, want) {
+		t.Fatalf("one Undo should fully restore the original line, got %+v", tab.Buffer.Lines)
+	}
+}
+
+// TestInsertNewlineIndented_ReadOnlyIsNoOp guards the belt-and-braces
+// gate every mutator on Tab carries.
+func TestInsertNewlineIndented_ReadOnlyIsNoOp(t *testing.T) {
+	tab := NewDiffTab("", nil)
+	tab.Buffer = NewBuffer("    foo")
+	tab.Cursor = Position{Line: 0, Col: 7}
+	tab.Anchor = tab.Cursor
+
+	tab.InsertNewlineIndented()
+
+	if got := tab.Buffer.Lines; len(got) != 1 || got[0] != "    foo" {
+		t.Fatalf("read-only tab should be untouched, got %+v", got)
+	}
+}
+
 // countingScreen wraps a SimulationScreen and tallies how many times each
 // cell is written. Embedding the interface gives us every method for free;
 // only SetContent needs intercepting.
